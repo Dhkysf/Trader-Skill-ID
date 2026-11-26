@@ -76,7 +76,7 @@ class Repo(unittest.TestCase):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
             readme = " ".join(fh.read().split())
         self.assertTrue(readme.startswith("# Trader Skill ID"))
-        for line in ("Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.",
+        for line in ("Agent skills for day-trading analysis in Google Antigravity: Indonesian stocks (IDX) today, forex next.",
                      "## Install",
                      ".agents\\skills",
                      "agy plugin install https://github.com/Dhkysf/Trader-Skill-ID",
@@ -141,8 +141,6 @@ class Repo(unittest.TestCase):
         self.assertEqual(cfg["no_entries_after"], "15:30")
         self.assertEqual(cfg["flat_by"], "15:45")
         self.assertEqual(cfg["broker"], "manual")
-        self.assertNotIn("sec_user_agent", cfg)
-        self.assertNotIn("pdt_guard", cfg)
         self.assertGreaterEqual(len(cfg.get("news_feeds", [])), 3)
         for feed in cfg["news_feeds"]:
             self.assertTrue(feed.get("label") and feed.get("url") and feed.get("checked"))

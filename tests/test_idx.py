@@ -459,11 +459,8 @@ class IdxAlertsTest(unittest.TestCase):
         self.assertEqual(len(rings), 1)
         self.assertIn("15:45 WIB", rings[0]["message"])
 
-        # Yahoo .JK only; stooq refused
+        # Yahoo .JK only
         self.assertIn("/BBCA.JK?", alerts.yahoo_url("BBCA", p=self.idx))
-        with self.assertRaises(alerts.AlertError) as cm:
-            alerts.get_quotes(["BBCA"], source="stooq", p=self.idx)
-        self.assertIn("stooq has no IDX quotes", str(cm.exception))
 
 
 class IdxTimeMachineTest(unittest.TestCase):
@@ -627,7 +624,7 @@ class IdxBudgetTest(unittest.TestCase):
 
 
 class IdxRiskTest(unittest.TestCase):
-    """Offline BBCA risk-check tests for IDX lots, ticks, ARA/ARB, windows, short/margin, and PDT."""
+    """Offline BBCA risk-check tests for IDX lots, ticks, ARA/ARB, windows, and short/margin."""
 
     def setUp(self):
         with open(BBCA_PLAN, encoding="utf-8") as fh:
@@ -707,20 +704,6 @@ class IdxRiskTest(unittest.TestCase):
         self.assertEqual(res_loss["results"][0]["verdict"], "BLOCK")
         self.assertTrue(any(r.startswith("loss:") for r in res_loss["results"][0]["reasons"]))
 
-    def test_pdt_guard_not_used_on_idx(self):
-        st = {"orders": [
-            {"symbol": "TLKM", "side": "buy", "status": "placed", "date": "2026-11-18"},
-            {"symbol": "TLKM", "side": "sell", "status": "filled", "date": "2026-11-18", "kind": "exit"},
-            {"symbol": "BBRI", "side": "buy", "status": "placed", "date": "2026-11-19"},
-            {"symbol": "BBRI", "side": "sell", "status": "filled", "date": "2026-11-19", "kind": "exit"},
-            {"symbol": "ASII", "side": "buy", "status": "placed", "date": "2026-11-20"},
-            {"symbol": "ASII", "side": "sell", "status": "filled", "date": "2026-11-20", "kind": "exit"},
-        ]}
-        res = check.check([self.order], dict(self.cfg, pdt_guard=True), state=st, now=self._at("2026-11-23 10:15"))
-        self.assertEqual(res["results"][0]["verdict"], "PASS")
-        self.assertEqual(res["today"]["pdt_guard"], "not used on IDX")
-        self.assertIn("pdt_guard: not used on IDX", check.report(res))
-
     def test_cash_check_and_cash_after_include_buy_fee(self):
         cfg = dict(self.cfg, max_loss_per_trade=75000)
         order = size.bracket_order(size.size_trade(self.plan, cfg, today="2026-11-23"))
@@ -743,7 +726,7 @@ class IdxRiskTest(unittest.TestCase):
 
 
 class IdxBrokerTest(unittest.TestCase):
-    """Offline end-to-end BBCA manual ticket tests (no Alpaca / MCP fields, explicit yes, journalling)."""
+    """Offline end-to-end BBCA manual ticket tests (no API / MCP fields, explicit yes, journalling)."""
 
     def _run_ticket(self, argv):
         out, err = io.StringIO(), io.StringIO()
@@ -751,7 +734,7 @@ class IdxBrokerTest(unittest.TestCase):
             code = ticket.main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def test_manual_bbca_ticket_flow_and_no_alpaca_fields(self):
+    def test_manual_bbca_ticket_flow_and_no_api_fields(self):
         with tempfile.TemporaryDirectory() as d:
             cfg_p = os.path.join(d, "config.json")
             orders_p = os.path.join(d, "orders.json")
@@ -775,7 +758,7 @@ class IdxBrokerTest(unittest.TestCase):
 
             with open(orders_p, encoding="utf-8") as fh:
                 ord_doc = json.load(fh)["orders"][0]
-            self.assertIsNone(ticket.tool_input(ord_doc))
+            self.assertFalse(hasattr(ticket, "tool_input"))
 
             common = ["--orders", orders_p, "--config", cfg_p, "--risk", risk_p,
                       "--state", state_p, "--now", "2026-11-23 10:15"]
@@ -787,7 +770,7 @@ class IdxBrokerTest(unittest.TestCase):
                 "max loss incl. fees Rp 64.219. Enter it in your broker app yourself.",
                 text,
             )
-            for forbidden in ("Alpaca", "place_stock_order", "order_class", "take_profit_limit_price",
+            for forbidden in ("place_stock_order", "order_class", "take_profit_limit_price",
                               "stop_loss_stop_price", "time_in_force", "tool_input"):
                 self.assertNotIn(forbidden, text)
 
@@ -875,47 +858,13 @@ class IdxBrokerTest(unittest.TestCase):
             with open(pf2, encoding="utf-8") as fh:
                 self.assertEqual(json.load(fh)["cash"], 10000000 - 2962500 - 5000)
 
-            # US: no fees, same cash and output as before, no fee in the journal
-            us_cfg = os.path.join(d, "us.json")
-            with open(us_cfg, "w", encoding="utf-8") as fh:
-                json.dump({"market": "us", "budget": 10000}, fh)
-            us_pf, us_st = os.path.join(d, "us_pf.json"), os.path.join(d, "us_broker.json")
-            code, out, err = self._run_ticket(["fill", "--symbol", "TSLA", "--side", "buy", "--qty", "8", "--price", "364.20",
-                                               "--date", "2026-10-19", "--portfolio", us_pf, "--config", us_cfg,
-                                               "--state", us_st, "--now", "2026-10-19 10:15"])
-            self.assertEqual(code, 0, err)
-            self.assertNotIn("fee", out)
-            with open(us_pf, encoding="utf-8") as fh:
-                self.assertEqual(json.load(fh)["cash"], 7086.4)
-            with open(us_st, encoding="utf-8") as fh:
-                self.assertNotIn("fee", json.load(fh)["orders"][0])
-
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):
-    pass
-
-    def test_determinism_and_us_tsla_reproduction(self):
+    def test_determinism_on_bbca(self):
         now_u = tm.parse_now("2026-11-26 16:00", p=self.idx)
         a = tm.time_machine(self.bbca_text, self._plan(), now_u, replays=500, seed=7, p=self.idx)["mc"]
         b = tm.time_machine(self.bbca_text, self._plan(), now_u, replays=500, seed=7, p=self.idx)["mc"]
         self.assertEqual(a, b)
-
-        tsla_gz = os.path.join(FIX, "trader-timemachine", "TSLA-60d5m.json.gz")
-        with tempfile.TemporaryDirectory() as d:
-            us_cfg = os.path.join(d, "us_config.json")
-            with open(us_cfg, "w", encoding="utf-8") as fh:
-                json.dump({"market": "us"}, fh)
-            out = io.StringIO()
-            with redirect_stdout(out):
-                code = tm.main([
-                    "run", "--symbol", "TSLA", "--date", "2026-10-19", "--entry", "364.18",
-                    "--stop", "358.32", "--target", "370.04", "--entry-time", "10:15 AM",
-                    "--config", us_cfg, "--offline", tsla_gz, "--now", "2026-10-19 10:50",
-                ])
-        self.assertEqual(code, 0)
-        text = out.getvalue()
-        for s in ("29.4 %", "25.5 %", "45.1 %", "fired 33 times: 13 target, 15 stop, 5 neither"):
-            self.assertIn(s, text)
 
 
 class DefaultIdxWithoutMarketKey(unittest.TestCase):
