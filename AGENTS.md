@@ -3,8 +3,7 @@
 Reply to the user in English. Keep answers short and concrete.
 
 ## Project
-Agent-skill pack for Google Antigravity for day-trading ANALYSIS: US stocks, Indonesian stocks (IDX/BEI) and forex.
-Started from Jakeschincariol/day-trader-skill (MIT, upstream commit 3d0f4ef). Git remote `upstream` points there: fetch only, never push.
+Agent-skill pack for day-trading ANALYSIS of Indonesian stocks (IDX/BEI) and, next, forex.
 
 - Each skill = `skills/<name>/SKILL.md` + one standard-library Python script.
 - Shared market code + market profiles: `skills/trader-core/` (`market.py`, `markets/*.json`), from task P03a on.
@@ -20,7 +19,7 @@ Started from Jakeschincariol/day-trader-skill (MIT, upstream commit 3d0f4ef). Gi
 - Tests run OFFLINE. Never let a test hit the network. New fixtures are cut from real data, kept small (gzip above 200 KB), with source + date noted in the test.
 - Free data endpoints: keep the polite pause and the single 429 retry. Never add code that bypasses bot protection (Cloudflare, captchas). If an official site blocks automated access, read a file the user downloads by hand instead.
 - Market rules (hours, holidays, tick size, lot, auto-rejection limits, fees) live in `markets/*.json`, never hard-coded in a skill script (from P03a on). Every rule value carries a source URL and a "checked" date.
-- US behaviour must not change unless the task says so: existing US tests keep passing without edits to their assertions.
+- IDX behaviour must not change unless the task says so: existing IDX tests keep passing without edits to their assertions.
 - Text in this repo uses plain "-" (no em dash character); tests check it.
 - The user runs Windows + PowerShell. Docs and printed commands use `python`, PowerShell syntax and `\` paths where a path is typed by the user.
 - One git command per terminal call; no `;`, `&&` or Write-Host chaining.

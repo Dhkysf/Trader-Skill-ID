@@ -29,7 +29,6 @@ active market profile. When omitted or empty, it defaults to `"idx"`.
 
 | profile | market | timezone | currency | status |
 | --- | --- | --- | --- | --- |
-| `us` | US Equities (NYSE/Nasdaq) | `us_eastern` (UTC-5 / UTC-4) | `USD` | active |
 | `idx` | Indonesia Stock Exchange (IDX/BEI) | `asia_jakarta` (UTC+7, WIB) | `IDR` | active |
 
 Planned profiles: `forex`.

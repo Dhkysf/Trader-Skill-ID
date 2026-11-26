@@ -88,18 +88,18 @@ A level setup has no opening range to lean on, so it needs a stop you name.
 
 ## Example: the reel
 
-TSLA, Monday 2026-10-19. The entry is 364.18 at 10:15 AM (the 10:10 bar,
+BBCA, Monday 2026-11-23. The entry is 9875 at 09:35 WIB (the 09:30 bar,
 bar 8) and the opening range is 354.47 to 362.18. `exit.py plan --stop
 or-mid --target 1R --write`:
 
 ```
 Exit plan: TSLA long, Mon 2026-10-19, opening-range breakout on 5-minute bars
-  Entry         $364.18 at 10:15 AM (bar 8)
+  Entry         Rp 9.875 at 09:35 WIB (bar 6)
   Stop          $358.32  opening-range midpoint: ($362.18 + $354.47) / 2 = $358.325, rounded down
   Target        $370.04  1R (one times the risk)
   Risk a share  $5.86 (1.61% of the entry)
   Reward:risk   1.0
-  Flat by       15:55 ET, win or lose: no overnight hold
+  Flat by       15:45 WIB, win or lose: no overnight hold
 ```
 
 The default 2R target would be 364.18 + 2 x 5.86 = 375.90. trader-budget then
@@ -129,4 +129,4 @@ make a plan pass, and never calls a stop a guarantee.
   user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
   permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.
+- Broker keys live in environment variables, never in the chat.

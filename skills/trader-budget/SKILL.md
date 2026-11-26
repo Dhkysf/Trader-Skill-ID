@@ -6,13 +6,13 @@ description: >-
   the whole shares that fit inside four limits (max loss per trade, position
   cap, max order, cash after your buffer), says which limit decided it, and
   writes ONE bracket order (entry, stop-loss, take-profit) to
-  trader/orders.json in the exact shape of Alpaca's place_stock_order. A stop
+  `trader/orders.json` in a clean manual-ticket shape. A stop
   too far away for your max loss is a plain refusal, not a smaller order.
   Nothing is placed. Use when the user says "how many shares", "size this
   trade", "how much should I buy", "I have $5,000", "I only want to risk $50
   a trade", "set my rules", "keep 10% in cash", or after /trader-exit writes
   a plan.
-argument-hint: "[budget in dollars]"
+argument-hint: "[budget in rupiah]"
 ---
 
 # trader-budget
@@ -34,7 +34,7 @@ python "<skill-dir>/size.py" --limit 364.00 --json  # a limit order at 364.00
 python "<skill-dir>/size.py" --weights AAPL=40,KO=60 --config split.json   # weights mode, below
 ```
 
-`--now "2026-10-19 10:15"` pins the clock (New York time). A plan for
+`--now "2026-10-19 10:15"` pins the clock (WIB). A plan for
 another day is refused: make a new one with trader-exit.
 
 ## What it reads and writes
@@ -59,7 +59,7 @@ If `trader/config.json` does not exist, copy `config.example.json` into
   budget), the biggest order ($4,000) and the smallest order ($5).
 - The day limits trader-risk enforces: **max_daily_loss_usd** (150), **max_trades_per_day** (3),
   **min_reward_risk** (1.0), **require_stop** (true), **no_entries_before** / **no_entries_after**
-  ("09:45" / "15:30") and **flat_by** ("15:55"), all New York time.
+  ("09:15" / "15:30") and **flat_by** ("15:45"), all WIB.
 - **blocked**: tickers they never want to trade.
 - Keep **paper** true until they have watched it work on a paper account.
 
@@ -69,7 +69,7 @@ If `trader/config.json` does not exist, copy `config.example.json` into
 python "<skill-dir>/size.py" --write
 ```
 
-Whole shares only: Alpaca takes no fractions in a bracket order. The size is
+IDX trades in 100-share lots (1 lot = 100 shares). The size is
 the smallest of four limits:
 
 | limit | shares |
@@ -92,14 +92,14 @@ the reason to the user in one line.
 
 ## Step 3: show the user
 
-Show the four limits, which one decided the size, the shares, the dollars
+Show the four limits, which one decided the size, the shares (lots), the rupiah
 and the max loss at the stop. Say plainly that a stop is an order, not a
 promise: in a fast market it can fill below the stop. Then hand over to
 `/trader-risk`.
 
 ## Example: the reel
 
-TSLA on Monday 2026-10-19. Opening-range breakout: entry 364.18 at 10:15 AM,
+BBCA on Monday 2026-11-23. Opening-range breakout: entry 9875 at 09:35 WIB,
 stop 358.32 (the opening-range midpoint), target 370.04 (1R). Risk 5.86 a
 share. The example config: $5,000 budget, 10% cash buffer, $50 max loss.
 
@@ -117,11 +117,11 @@ share. The example config: $5,000 budget, 10% cash buffer, $50 max loss.
  "order_class": "bracket", "take_profit_limit_price": "370.04", "stop_loss_stop_price": "358.32",
  "why": "opening-range breakout on TSLA: 8 shares, bound by your $50 max loss per trade (8 x 5.86 = $46.88 at the stop)",
  "plan": {"entry": 364.18, "stop": 358.32, "target": 370.04, "risk_per_share": 5.86, "max_loss": 46.88,
-          "setup": "orb", "entry_time": "10:15 AM", "flat_by": "15:55"}}
+          "setup": "orb", "entry_time": "09:35", "flat_by": "15:45"}}
 ```
 
 `why` and `plan` are notes for trader-risk and trader-broker. They are never
-sent to Alpaca. With the stop at 300.00 instead, one share would risk 64.18,
+ready for your broker app. With a wider stop, one share would risk more,
 more than the $50 max loss: no order. At 10:52 the real quote was 366.48, so
 the same plan sizes to 6 shares at 8.16 a share, and reward:risk falls to
 0.44: refused, because the move it was waiting for has mostly happened.
@@ -132,7 +132,7 @@ the same plan sizes to 6 shares at 8.16 a share, and reward:risk falls to
 here) splits a budget across a list by weight: the cash buffer comes off the
 top, weights are renormalised to 100, any stock over `max_position_pct` is
 pinned at the cap and its excess shared out, slices under the minimum order
-are dropped, and amounts round to whole dollars so nothing is left idle by
+are dropped, and amounts round to whole rupiah so nothing is left idle by
 accident. With `"max_position_pct": 25` and `"fractional": true`, the example
 file gives AAPL $1,250 (capped), AXP $1,119, GOOGL $823, KO $708, BAC $600.
 With `"fractional": false` (the example config) it buys whole shares and

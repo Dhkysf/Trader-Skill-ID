@@ -2,12 +2,11 @@
 name: trader-news
 description: >-
   News Monitor. Tracks breaking news on every stock you watch and flags what
-  moves it: Yahoo Finance headlines per ticker, each company's 8-K filings on
-  SEC EDGAR (earnings, CEO changes, deals, restatements, bankruptcy) and how
+  moves it: Yahoo Finance headlines per ticker, Indonesian financial RSS feeds, and how
   far each stock is from yesterday's close. Shows only what is new since the
-  last check, newest first, in New York time, tags each item (earnings,
+  last check, newest first, in WIB, tags each item (earnings,
   analyst, deal, halt, regulatory, macro...) and never repeats one. Use when
-  the user says "any news on TSLA", "why is this moving", "what's the news on
+  the user says "any news on BBCA", "why is this moving", "what's the news on
   my watchlist", "morning briefing", "pre-market news", "monitor the news",
   "did anything break", "check the 8-Ks", or after /trader-scanner finds setups.
 argument-hint: "[tickers]"
@@ -25,7 +24,7 @@ headline and a move sit side by side.
 
 ```bash
 python "<skill-dir>/news.py"                         # watchlist + plan + portfolio
-python "<skill-dir>/news.py" --tickers TSLA NVDA --hours 12
+python "<skill-dir>/news.py" --tickers BBCA BBRI --hours 12
 python "<skill-dir>/news.py" --no-sec --json
 ```
 
@@ -38,7 +37,7 @@ python "<skill-dir>/news.py" --no-sec --json
 | `trader/portfolio.json` | what you hold (trader-broker records fills there) |
 | Yahoo Finance headline RSS | `https://feeds.finance.yahoo.com/rss/2.0/headline?s=TSLA&region=US&lang=en-US` |
 | Yahoo Finance chart endpoint | the last price against yesterday's close (unofficial, can lag) |
-| SEC EDGAR company Atom feed | 8-K by default (`--forms 8-K,10-Q` for more); needs `sec_user_agent` in `trader/config.json` or `SEC_USER_AGENT`, else filings are skipped with a note |
+| IDX RSS feeds | Yahoo Finance RSS and Indonesian financial feeds |
 | `trader/state/news.json` | what has been shown (kept 30 days) and each ticker's CIK |
 
 ## The rules
@@ -78,7 +77,7 @@ morning before the open.
 
 ## Example: the reel
 
-Monday 2026-10-19, TSLA broke its opening range at 10:15 AM ET. The check at
+Monday 2026-11-23, BBCA broke its opening range at 09:35 WIB. The check at
 10:15 (Yahoo Finance's TSLA feed, 16 headlines since 8:00) leads with the
 morning's real stories: "Meta and Musk earnings and September pending home
 sales: What to Watch" (8:00, earnings), "Tesla-SpaceX Merger Mania Strikes
@@ -86,7 +85,7 @@ Wall Street Ahead of Earnings" (8:04, earnings, deal), "Tech Stock Rebound
 Nudges US Equity Futures Mostly Higher Pre-Bell" (8:02, macro). The brief:
 "Tesla reports this week, so the stock can gap overnight; today's trade is
 in and out before the close. No new 8-K." At 10:52 the price line reads
-`TSLA 366.48 +3.31% vs yesterday's close 354.72 at 10:52 ET  MOVING`. When a
+`BBCA 9.875 +1.80% vs yesterday's close 9.700 at 09:52 WIB  MOVING`. When a
 ticker has no news, say so rather than padding the brief.
 
 ## What it never does
@@ -104,7 +103,7 @@ When `"market"` is `"idx"` (the default when omitted in `trader/config.json`):
 - Reads RSS feeds from `news_feeds` (`label`, `url`) in `trader/config.json` (see `skills/trader-budget/config.example.json`).
 - Matches items to watched tickers by stock code and by company name from `trader/universe.txt` (`SYMBOL|Name`, `--universe`), ignoring unrelated items.
 - Checks the price move via Yahoo Finance chart (`.JK` suffix) and prints times in `WIB` and prices in `Rp`.
-- Does not call SEC EDGAR or ask for `sec_user_agent`.
+- Offline mode reads cached RSS fixtures without hitting the network.
 
 ## Safety
 

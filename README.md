@@ -1,9 +1,9 @@
 # Trader Skill ID
 
-Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.
+Agent skills for day-trading analysis in Google Antigravity: Indonesian stocks (IDX) today, forex next.
 
 Free, MIT, no signup, no API key. The tools are plain Python that read free
-public data: Yahoo Finance charts, Nasdaq Trader's symbol lists and SEC EDGAR.
+public data: Yahoo Finance charts and Indonesian RSS news feeds.
 
 One scans thousands of charts for setups. Another tracks breaking news on
 every stock you watch. One watches a setup bar by bar and tells you the moment
@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Force -Path "E:\Projects\Trading-Lab\.agents\skill
 Copy-Item -Recurse -Force ".\skills\trader-*" "E:\Projects\Trading-Lab\.agents\skills\"
 ```
 
-(Use any dedicated folder path you prefer.) Open that folder in Google Antigravity, start a new chat, and run `/trader-news TSLA`.
+(Use any dedicated folder path you prefer.) Open that folder in Google Antigravity, start a new chat, and run `/trader-news BBCA`.
 
 **(b) Antigravity CLI (`agy`)**
 
@@ -36,10 +36,7 @@ Copy-Item -Recurse -Force ".\skills\trader-*" "E:\Projects\Trading-Lab\.agents\s
 agy plugin install https://github.com/Dhkysf/Trader-Skill-ID
 ```
 
-The tools need Python 3.8 or newer. Nothing to pip install. The SEC tools
-(news filings) ask you to identify yourself: put your name and
-email in `trader/config.json` (`"sec_user_agent": "Your Name you@example.com"`)
-or in the `SEC_USER_AGENT` environment variable.
+The tools need Python 3.8 or newer. Nothing to pip install.
 
 ## The nine
 
@@ -49,10 +46,10 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-news` | News Monitor | Tracks breaking news on every stock you watch and flags what moves it. |
 | `/trader-entry` | Entry Timer | Watches a setup bar by bar and tells you the moment to get in. |
 | `/trader-exit` | Exit Planner | Sets your stop and your target before you enter, so you know when to get out. |
-| `/trader-timemachine` | Time Machine | Replays every possible outcome of a trade before you risk a dollar: 10,000 simulated sessions plus every past time the setup fired. |
+| `/trader-timemachine` | Time Machine | Replays every possible outcome of a trade before you risk money: 10,000 simulated sessions plus every past time the setup fired. |
 | `/trader-risk` | Risk Manager | Checks every trade against your limits and stops anything over them. |
 | `/trader-budget` | Budget Manager | Sizes every position to your budget and your max loss per trade. |
-| `/trader-broker` | Order Executor | Sends approved orders to your broker, paper trading by default, never without your yes. |
+| `/trader-broker` | Order Executor | Renders manual order tickets and logs your explicit yes and fills, never without your yes. |
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop or the opening bell hits. |
 
 Shared module: `/trader-core` - shared market rules used by the other skills.
@@ -68,40 +65,35 @@ alerts: stop, target, flat by the close                                       (w
 news                                                                           (on a schedule)
 ```
 
-An example, the trade in the reel: Tesla, Monday October 19 2026, real data.
+An example on IDX: BBCA, Monday November 23 2026, real data (WIB).
 
-1. **`/trader-scanner`** at 10:15 AM ET: of the 231 charts in the reel's
-   scan, 42 had closed above their 15-minute opening range. TSLA is one: range 354.47 to 362.18,
-   the 10:10 candle closed at 364.18, 0.55 % over the top.
-2. **`/trader-news`**: the morning's TSLA headlines, in New York time
-   ("Tesla-SpaceX Merger Mania Strikes Wall Street Ahead of Earnings", 8:04,
-   tagged earnings and deal). Tesla reports this week: a day trade is out
-   before the close, so it is not exposed to the report.
-3. **`/trader-entry`** watched TSLA bar by bar. At 10:12 it said waiting (the
-   10:10 bar was still forming). At 10:15 it said triggered: the first
-   5-minute close above the range, 364.18.
-4. **`/trader-exit`** set the plan before the entry: stop at the range's
-   midpoint, 358.32, so 5.86 a share at risk; target one times that risk,
-   370.04; flat by 3:55 PM either way.
-5. **`/trader-timemachine`** replayed the rest of the day 10,000 times, each
-   5-minute candle drawn from TSLA's own candles at that time of day over the
-   previous 59 sessions (seed 19, so anyone can repeat it): target first
-   29.4 %, stop first 25.5 %, still open at the close 45.1 %. It also re-ran
-   the same rule on those 59 real sessions: it fired 33 times, 13 hit the
-   target, 15 the stop, 5 neither. Its verdict: close to a coin flip. That is
-   the point of looking before you risk a dollar.
-6. **`/trader-budget`** with a $5,000 account and a $50 max loss per trade:
-   50 / 5.86 = 8 shares ($2,913.44). If the stop fills at 358.32, the loss is
-   $46.88. It writes one bracket order: buy 8 TSLA, stop-loss 358.32,
-   take-profit 370.04.
-7. **`/trader-risk`** checks it against your limits: the max loss, the daily
-   loss limit, trades per day, reward to risk, the entry window, position
-   size and cash. PASS or BLOCK, with the reason.
-8. **`/trader-broker`** shows you the ticket in plain words. You type yes for
-   that exact order. The agent calls your brokerage connector (Alpaca's MCP
-   server, paper account by default), and the agent's own permission prompt
-   asks you one more time.
-9. **`/trader-alerts`** rings on the stop, the target and at 3:55 PM to
+1. **`/trader-scanner`** at 09:35 WIB: BBCA closed above its 15-minute opening
+   range (09:00-09:15, Rp 5.425 to Rp 5.500): the 09:30 candle closed at
+   Rp 5.550 (+0.91%).
+2. **`/trader-news`**: checks Indonesian RSS feeds (`news_feeds` in
+   `trader/config.json`) for BBCA headlines in WIB and shows today's price
+   move vs yesterday's close.
+3. **`/trader-entry`** watches BBCA bar by bar (5-minute bars, Yahoo `.JK`
+   data is about 10 minutes late) and flags the first closed bar above the
+   range high.
+4. **`/trader-exit`** sets the plan before the entry: stop rounded down to the
+   IDX tick (e.g. Rp 9.700), target (e.g. 2R at Rp 10.200), flat by 15:45 WIB
+   either way, and warns if the plan holds through the lunch break or hits
+   today's ARA/ARB band.
+5. **`/trader-timemachine`** replays the rest of the day 10,000 times from
+   BBCA's own 5-minute bars over the previous 60 days (seed 19, separate
+   Mon-Thu and Friday slot maps, lunch-gap isolation, ARA/ARB clamping) plus
+   every past session the same rule fired.
+6. **`/trader-budget`** with a Rp 10.000.000 account and Rp 100.000 max loss
+   per trade: sizes in whole lots of 100 shares, including buy/sell broker
+   fees, and writes one manual order to `trader/orders.json`.
+7. **`/trader-risk`** checks it against your limits: lot size, IDX tick table,
+   ARA/ARB band, lunch break, pre-closing, max loss incl. fees, daily loss,
+   trades per day, reward:risk, and cash. PASS or BLOCK, with the reason.
+8. **`/trader-broker`** shows you the manual ticket in plain words. You type
+   yes for that exact order, enter it in your broker app yourself, and record
+   the fill.
+9. **`/trader-alerts`** rings on the stop, the target and at 15:45 WIB to
    flatten whatever is still open.
 
 ## The tools
@@ -111,12 +103,12 @@ polite about it. Commands below use `python` on Windows (use `python3` and `/`
 on macOS/Linux):
 
 ```powershell
-python skills\trader-scanner\scan.py universe                                # ~5,900 US stocks, Nasdaq Trader
+python skills\trader-scanner\scan.py universe --from data\daftar-saham.csv   # IDX Daftar Saham -> trader/universe.txt
 python skills\trader-scanner\scan.py daily                                   # pre-market setups, whole universe
-python skills\trader-scanner\scan.py orb --at 10:15                          # opening-range breakouts so far
-python skills\trader-news\news.py --tickers TSLA --hours 12                  # headlines, 8-Ks, today's move
-python skills\trader-entry\entry.py check TSLA --setup orb                   # waiting / triggered / expired
-python skills\trader-entry\entry.py watch TSLA --every 30                    # bar by bar until it triggers
+python skills\trader-scanner\scan.py orb --at 10:15                          # opening-range breakouts so far (WIB)
+python skills\trader-news\news.py --tickers BBCA --hours 12                  # RSS headlines, today's move
+python skills\trader-entry\entry.py check BBCA --setup orb                   # waiting / triggered / expired
+python skills\trader-entry\entry.py watch BBCA --every 30                    # bar by bar until it triggers
 python skills\trader-exit\exit.py plan --stop or-mid --target 1R --write     # -> trader/plan.json
 python skills\trader-timemachine\timemachine.py run --write                  # 10,000 replays + the history
 python skills\trader-budget\size.py --write                                  # -> trader/orders.json
@@ -131,10 +123,8 @@ python skills\trader-alerts\alerts.py check                                  # r
 python -m unittest discover -s tests -v
 ```
 
-The tests run offline, on fixtures cut from real data: TSLA's 5-minute bars
-for the 60 days to October 19 2026, the 10:15 AM opening-range scan, and
-Yahoo's TSLA headlines that morning. They reproduce every number in the example
-above.
+The tests run offline, on IDX fixtures cut from real data (BBCA, BBRI, TLKM,
+GOTO, and CNBC Indonesia RSS).
 
 ## Fine print
 
@@ -150,9 +140,8 @@ permissions, never `allow`, so the agent's own permission prompt is a second
 check. Never use Turbo mode in a trading workspace. No options, margin, short
 selling or leverage unless you turn them on.
 
-**Paper first.** `"paper": true` is the default in `config.example.json`, and
-Alpaca's MCP server defaults to its paper account. Keys live in environment
-variables, never in the chat.
+**Paper first.** `"paper": true` and `"broker": "manual"` are the defaults in
+`config.example.json`. IDX orders are entered manually in your broker app.
 
 **The Time Machine is a simulation, not a prediction.** It is built from the
 stock's own last 60 days of 5-minute bars. The future can do things those 60
@@ -168,20 +157,14 @@ official API: it can lag, change or rate-limit you. The scanner and the entry
 timer read 1-minute or 5-minute bars, not every tick. Check anything that
 matters against your broker before you act on it.
 
-**Day-trading rules.** FINRA removed the $25,000 pattern-day-trader minimum
-on June 4, 2026 (Regulatory Notice 26-10), and brokers may phase the change
-in until October 20, 2027, so yours may still apply the old rule. If it does,
-set `"pdt_guard": true` and `/trader-risk` counts your day trades.
-
-**Taxes.** Day-trading gains are short-term gains, and frequent trading makes
-wash sales likely. Nothing here is tax advice.
+**Taxes.** Nothing here is tax advice.
 
 ## Files
 
 ```
 .antigravity-plugin/plugin.json
 skills/
-  trader-core/        SKILL.md, market.py, markets/us.json
+  trader-core/        SKILL.md, market.py, markets/idx.json
   trader-scanner/     SKILL.md, scan.py
   trader-news/        SKILL.md, news.py
   trader-entry/       SKILL.md, entry.py
@@ -189,7 +172,7 @@ skills/
   trader-timemachine/ SKILL.md, timemachine.py
   trader-risk/        SKILL.md, check.py
   trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
-  trader-broker/      SKILL.md, ticket.py, mcp_config.example.json
+  trader-broker/      SKILL.md, ticket.py
   trader-alerts/      SKILL.md, alerts.py, alerts.example.json
 tests/                unittest suite + offline fixtures
 ```
@@ -200,6 +183,6 @@ Based on [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/d
 
 ## Ringkasan (Bahasa Indonesia)
 
-Trader Skill ID adalah paket skill agen untuk analisis day-trading di Google Antigravity: saham AS saat ini, saham Indonesia (IDX) dan forex berikutnya. Ini bukan nasihat keuangan; semua keputusan transaksi tetap di tangan Anda dan tidak ada order yang dikirim tanpa persetujuan eksplisit. Data pasar yang digunakan bersifat gratis, tidak resmi, dan dapat tertunda.
+Trader Skill ID adalah paket skill agen untuk analisis day-trading di Google Antigravity: saham Indonesia (IDX) saat ini, dan forex berikutnya. Ini bukan nasihat keuangan; semua keputusan transaksi tetap di tangan Anda dan tidak ada order yang dikirim tanpa persetujuan eksplisit. Data pasar yang digunakan bersifat gratis, tidak resmi, dan dapat tertunda.
 
 MIT.

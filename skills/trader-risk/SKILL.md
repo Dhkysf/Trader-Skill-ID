@@ -32,7 +32,7 @@ keep each loss and each day's losses small. They do not make a trade win.
 python "<skill-dir>/check.py"                           # trader/ files; writes trader/state/risk.json
 python "<skill-dir>/check.py" --json
 python "<skill-dir>/check.py" --no-write                # look without recording
-python "<skill-dir>/check.py" --now "2026-10-19 10:15"  # pin the clock (New York time)
+python "<skill-dir>/check.py" --now "2026-10-19 10:15"  # pin the clock (WIB)
 ```
 
 ## What it reads and writes
@@ -61,7 +61,7 @@ batch that is fine order by order but breaks a limit together is caught.
 
 | check | blocks when |
 | --- | --- |
-| format | no symbol, side not buy or sell, both or neither of qty and notional, a notional order that is not market + day (Alpaca's rule), a limit order with no limit price; a bracket that is not whole shares, not `day` or `gtc`, or misses its stop-loss or take-profit |
+| format | no symbol, side not buy or sell, both or neither of qty and notional, a notional order that is not market + day, a limit order with no limit price; a bracket that is not whole shares, not `day` or `gtc`, or misses its stop-loss or take-profit |
 | asset | an option symbol while `allow_options` is false; crypto or anything that is not a US stock or ETF ticker |
 | short | a sell of more than you hold (`allow_short` false) |
 | blocked | (entries) the ticker is on the `blocked` list |
@@ -74,7 +74,7 @@ batch that is fine order by order but breaks a limit together is caught.
 | daily loss | (entries) the max losses at the stops of today's entries, plus this one, over `max_daily_loss_usd` |
 | trades | (entries) `max_trades_per_day` entries already placed today |
 | window | (entries) before `no_entries_before` or after `no_entries_after`, or the market is closed |
-| pdt | (entries, only with `pdt_guard` true) 3 day trades already in the last 5 business days |
+| duplicate | same symbol, same side, already in `open_orders` |
 | duplicate | (entries) the same symbol and side twice in one batch, or already placed today |
 | daily limit | (entries) `max_orders_per_day` orders already placed today |
 
@@ -87,16 +87,10 @@ How the numbers work:
   used, and it says so.
 - **Daily loss** counts the full max loss of every entry placed today, win or
   lose, as trader-broker logged it. Three full-size trades use up a $150 day.
-- **The window** is New York time, worked out in the tool (daylight saving
-  included), never from the computer's clock zone. Weekends and NYSE holidays
+- **The window** is WIB (Asia/Jakarta), worked out in the tool, never from the computer's clock zone. Weekends and IDX holidays
   are closed. On a 1:00 p.m. early close the window ends 3 hours earlier too.
   Set both `no_entries_*` to null to switch the window off.
-- **pdt_guard** (off by default) counts a day trade as a symbol bought and
-  sold on the same day in the log, plus any entry placed today (it is meant
-  to be flat by the close). FINRA removed the $25,000 pattern-day-trader
-  minimum (Regulatory Notice 26-10, effective June 4, 2026; firms may phase
-  in until October 20, 2027), so some brokers still apply the old rule: turn
-  `pdt_guard` on if yours does.
+- **No short / no margin** by default for IDX stocks.
 
 Warnings do not block, but say them to the user: a LIVE account, a number
 sent as a number instead of a string, a stop that lives only in the plan and
@@ -105,7 +99,7 @@ not at the broker, a price too old to use, an early close today.
 ## Steps
 
 1. If the price may have moved since the plan, refresh it first
-   (trader-alerts: `alerts.py quote TSLA --write`).
+   (trader-alerts: `alerts.py quote BBCA --write`).
 2. Run `check.py`. Exit code 0 means every order passed, 1 means at least one
    was blocked.
 3. Tell the user the result in plain words, order by order: the max loss at
@@ -119,7 +113,7 @@ not at the broker, a price too old to use, an early close today.
 
 ## Example: the reel
 
-The TSLA bracket from trader-budget at 10:15 AM on Monday 2026-10-19, on a
+The BBCA bracket from trader-budget at 09:35 WIB on Monday 2026-11-23, on a
 fresh $5,000 paper account with the example config:
 
 ```
@@ -128,7 +122,7 @@ PASS  #1 buy TSLA 8 shares, entry
           max loss $46.88 (limit $50), reward:risk 1.00 (min 1)
           today before this: 0 of 3 trades, $0 of $150 daily loss
 
-1 passed, 0 blocked at 2026-10-19 10:15 New York. Cash after the passed orders: $2,086.56 (paper account).
+1 passed, 0 blocked at 2026-10-19 10:15 WIB. Cash after the passed orders: Rp 10,000,000 (paper account).
 ```
 
 One more share and it is blocked:
@@ -144,7 +138,7 @@ BLOCK #1 buy TSLA 9 shares, entry
 The same 8 shares checked at 10:55 with the real 10:52 quote (366.48) in
 `trader/prices.json` are blocked twice: 8 x 8.16 = $65.28 at the stop, and
 reward:risk 0.44. At 9:40 they are blocked by the window (no new entries
-before 9:45). The 3:55 PM sell that closes the position passes, even though
+before 09:15). The 15:45 WIB sell that closes the position passes, even though
 it is after the 3:30 entry cutoff: it is an exit.
 
 ## Rules
@@ -170,7 +164,7 @@ When `"market": "idx"` is set in `trader/config.json`:
 - **window**: blocks entries during the lunch break (Mon-Thu 12:00-13:30, Fri 11:30-14:00 WIB), pre-closing (15:50-16:00 WIB), or outside the entry window.
 - **short / margin**: always blocked on IDX.
 - **loss**: max loss per trade includes buy and sell fees.
-- **pdt_guard**: not used on IDX.
+- **Lot size**: orders must be multiples of 100 shares (1 lot).
 
 ## Safety
 
@@ -181,4 +175,4 @@ When `"market": "idx"` is set in `trader/config.json`:
   user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
   permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.
+- Broker keys live in environment variables, never in the chat.

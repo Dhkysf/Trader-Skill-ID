@@ -2,7 +2,7 @@
 name: trader-timemachine
 description: >-
   Time Machine. Replays every possible outcome of a trade before you risk a
-  dollar: 10,000 simulated sessions plus every past time the setup fired.
+  money: 10,000 simulated sessions plus every past time the setup fired.
   Takes the plan from trader-exit (entry, stop, target), rebuilds the rest of
   the day 10,000 times from the stock's own 5-minute bars over the last 60
   days, and re-runs the same rule on every past session. Prints the odds of
@@ -34,14 +34,14 @@ python "<skill-dir>/timemachine.py" run                    # trader/plan.json, 1
 python "<skill-dir>/timemachine.py" run --write            # also save trader/timemachine.json
 python "<skill-dir>/timemachine.py" run --until 15:55      # end each replay at your flat-by time
 python "<skill-dir>/timemachine.py" run --json
-python "<skill-dir>/timemachine.py" run --symbol TSLA --date 2026-10-19 \
-    --entry 364.18 --stop 358.32 --target 370.04 --entry-time "10:15 AM"
+python "<skill-dir>/timemachine.py" run --symbol BBCA --date 2026-10-19 \
+    --entry 5550 --stop 5425 --target 5800 --entry-time "09:35"
 python "<skill-dir>/timemachine.py" chart --from           # ASCII fan chart of the saved run
 ```
 
 Other flags: `--replays N`, `--seed N` (default 19), `--window N` (default 2
 bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
-`--now "2026-10-19 10:15"` (New York time) to pin the clock.
+`--now "2026-10-19 10:15"` (WIB) to pin the clock.
 
 ## What it reads and writes
 
@@ -54,7 +54,7 @@ bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
 ## How it works
 
 1. **The pool.** It keeps only FULL sessions before the plan's date: all 78
-   five-minute bars, 9:30 to 4:00 New York time. Half days, gaps and today
+   five-minute bars, 09:00 to 16:00 WIB (with lunch break). Half days, gaps and today
    are left out. Every bar becomes four ratios to the bar before it:
    open, high, low and close over the previous close.
 2. **One replay.** Start at the entry price. For each bar left in the day,
@@ -62,8 +62,8 @@ bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
    random, and scale it to the current price. Bar by bar, it checks the stop
    first, then the target. A bar that touches both counts as the stop.
 3. **10,000 replays** give four odds. Target first. Stop first. Neither,
-   which means the trade was still open at `--until` (default 4:00 PM, the
-   close, or 1:00 PM on an NYSE early-close day). Green, which means target
+   which means the trade was still open at `--until` (default 15:50 WIB, the
+   close). Green, which means target
    first or above the entry at `--until`.
    R is +1 at a 1R target, -1 at the stop, and otherwise the distance from
    the entry at `--until` divided by the risk. A gap through the stop still
@@ -114,22 +114,22 @@ grid). A live in-progress bar is never used.
 
 ## Example: the reel
 
-TSLA, Monday 2026-10-19. The 15-minute opening range is 354.47 to 362.18.
-The 10:10 bar closes above it: entry 364.18 at 10:15 AM (bar 8), stop 358.32
+BBCA, Monday 2026-11-23. The 15-minute opening range is 5425 to 5500.
+The 09:30 bar closes above it: entry 5550 at 09:35 WIB (bar 6), stop 5425
 (the range midpoint, rounded down), target 370.04 (1R, risk 5.86 a share).
 
 ```
-10,000 replays of the rest of the session, 10:15 AM to 4:00 PM (69 five-minute bars), seed 19.
+10,000 replays of the rest of the session, 09:35 to 15:50 WIB, seed 19.
   target first   29.4 %
   stop first     25.5 %
-  neither        45.1 %   still open at 4:00 PM
-  green          51.7 %   target first, or above the entry at 4:00 PM
-  Price at 4:00 PM: median 364.36, 90 % of replays between 355.54 and 373.54.
+  neither        45.1 %   still open at 15:50 WIB
+  green          51.7 %   target first, or above the entry at 15:50 WIB
+  Price at 15:50 WIB: median 5560, 90 % of replays between 5400 and 5725.
   Average R: +0.034
 History: the same rule on each of those 59 real sessions fired 33 times:
 13 target, 15 stop, 5 neither. Average R -0.062.
 Close to a coin flip: target first 29.4 % vs stop first 25.5 %.
-45.1 % of the replays hit neither by 4:00 PM; the price at 4:00 PM decides those.
+45.1 % of the replays hit neither by 15:50 WIB; the price at 15:50 WIB decides those.
 ```
 
 At 1R the target has to come first in half of the replays that hit one
@@ -182,4 +182,4 @@ that carries `"market": "idx"`.
   user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
   permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.
+- Broker keys live in environment variables, never in the chat.
