@@ -139,6 +139,12 @@ are in the calendar.
 - Partial results are said as partial: "Fetched 4,980 of 5,259 charts (279
   failed or had no data)". Never round a partial scan up to "the whole market".
 - NYSE holidays and early closes for 2026 and 2027 (nyse.com, read 2026-10-13).
+- IDX (`"market": "idx"` in `trader/config.json`): `universe --from data\daftar-saham.csv`
+  reads a local IDX Daftar Saham CSV (comma or semicolon separated, dropping
+  `Pemantauan Khusus` rows) or plain text list. `daily` defaults to
+  `--min-price 100` and `min_value_idr` 5,000,000,000 (price x volume). `orb`
+  starts at 09:00 WIB and skips the lunch break. Every IDX scan prints the
+  10-minute Yahoo delay notice.
 
 ## Steps
 

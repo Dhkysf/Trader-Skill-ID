@@ -69,6 +69,7 @@ Exit code 0 when the scan found something, 1 when it did not or could not run.
 """
 
 import argparse
+import csv
 import datetime
 import gzip
 import json
@@ -164,12 +165,51 @@ def parse_hhmm(text, flag="--at"):
     return datetime.time(int(m.group(1)), int(m.group(2)))
 
 
-def trading_day(d):
-    """(is_trading_day, reason). Weekends and the NYSE holiday list."""
-    if market.is_trading_day(_US, d):
+def _tz_label(p=None):
+    return (p or _US).get("tz_label", "ET")
+
+
+def ts_to_local(ts, p=None):
+    """Unix seconds -> naive local wall-clock time for profile `p`."""
+    return market.to_local(p or _US, datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=int(ts)))
+
+
+def _parse_now_in(text, p=None):
+    """ISO time -> naive UTC. Naive times are interpreted in profile `p`'s local time."""
+    if not text or not p or p.get("id") == "us":
+        return parse_now(text)
+    t = text.strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.datetime.fromisoformat(t)
+    except ValueError:
+        raise ScanError('--now wants a time like "2026-10-19 10:15" (%s) or ...Z (UTC)' % _tz_label(p))
+    if dt.tzinfo is None:
+        return market.local_to_utc(p, dt)
+    return (dt - dt.utcoffset()).replace(tzinfo=None)
+
+
+def _delay_line(p):
+    delay = (p or {}).get("data_delay_min", 0)
+    if delay > 0:
+        ex = p.get("exchange") or p["id"].upper()
+        return "%s data from Yahoo is about %d minutes late. Check your broker app before acting." % (ex, delay)
+    return None
+
+
+def _fmt_price(x, p=None):
+    if (p or _US).get("currency", "USD") == "USD":
+        return "${:,.2f}".format(x)
+    return market.money(p, x)
+
+
+def trading_day(d, p=None):
+    """(is_trading_day, reason). Weekends and the profile's holiday list."""
+    prof = p or _US
+    if market.is_trading_day(prof, d):
         return True, ""
-    name = NYSE_HOLIDAYS.get(d.isoformat())
-    return False, ("NYSE holiday: " + name) if name else "weekend"
+    name = (prof.get("holidays") or {}).get(d.isoformat())
+    ex = prof.get("exchange", "NYSE")
+    return False, ("%s holiday: %s" % (ex, name)) if name else "weekend"
 
 
 def session(d):
@@ -231,17 +271,31 @@ def yahoo_get(path):
     raise ScanError("Yahoo answered %s for %s" % (last, path.split("?")[0]))
 
 
-def to_yahoo(sym):
-    return sym.upper().replace(".", "-")
+def _norm_sym(sym, p=None):
+    s = sym.upper()
+    suf = (p or {}).get("yahoo_suffix") or ""
+    if suf:
+        if s.endswith(suf.upper()):
+            return s[:-len(suf)]
+        return s
+    return s.replace("-", ".")
 
 
-def spark_path(symbols, rng, interval):
+def to_yahoo(sym, p=None):
+    s = sym.upper()
+    suf = (p or {}).get("yahoo_suffix") or ""
+    if suf:
+        return s if s.endswith(suf.upper()) else s + suf
+    return s.replace(".", "-")
+
+
+def spark_path(symbols, rng, interval, p=None):
     return "/v7/finance/spark?symbols=%s&range=%s&interval=%s" % (
-        ",".join(to_yahoo(s) for s in symbols), rng, interval)
+        ",".join(to_yahoo(s, p) for s in symbols), rng, interval)
 
 
-def chart_path(sym, rng, interval):
-    return "/v8/finance/chart/%s?range=%s&interval=%s" % (to_yahoo(sym), rng, interval)
+def chart_path(sym, rng, interval, p=None):
+    return "/v8/finance/chart/%s?range=%s&interval=%s" % (to_yahoo(sym, p), rng, interval)
 
 
 # ---------------------------------------------------------------- parsing
@@ -259,7 +313,7 @@ def series_from_result(res):
             "l": col("low"), "v": col("volume"), "meta": res.get("meta") or {}}
 
 
-def parse_spark(text_or_doc, wanted=None):
+def parse_spark(text_or_doc, wanted=None, p=None):
     """Spark JSON -> {SYM: series}. Symbols Yahoo does not know are simply missing
     from the answer. `wanted` maps Yahoo symbols back to ours (BRK-B -> BRK.B)."""
     doc = json.loads(text_or_doc) if isinstance(text_or_doc, str) else text_or_doc
@@ -273,7 +327,7 @@ def parse_spark(text_or_doc, wanted=None):
         if not resp:
             continue
         ysym = item.get("symbol") or (resp[0].get("meta") or {}).get("symbol") or ""
-        sym = (wanted or {}).get(ysym.upper(), ysym.upper().replace("-", "."))
+        sym = (wanted or {}).get(ysym.upper(), _norm_sym(ysym, p))
         out[sym] = series_from_result(resp[0])
     if err and not out:
         raise ScanError("Yahoo spark: %s" % (err.get("description") or err.get("code") or err))
@@ -309,30 +363,31 @@ def _stem(name):
     return name
 
 
-def _absorb(doc, name_hint, data, errors):
+def _absorb(doc, name_hint, data, errors, p=None):
     """One parsed offline JSON doc -> data / errors."""
     if isinstance(doc, dict) and "spark" in doc:
-        data.update(parse_spark(doc))
+        data.update(parse_spark(doc, p=p))
     elif isinstance(doc, dict) and "chart" in doc:
-        sym = name_hint
+        sym = ""
+        try:
+            sym = (doc["chart"].get("result") or [{}])[0]["meta"]["symbol"]
+        except (AttributeError, KeyError, TypeError, IndexError):
+            sym = name_hint
         if not sym:
-            try:
-                sym = (doc["chart"].get("result") or [{}])[0]["meta"]["symbol"]
-            except (AttributeError, KeyError, TypeError, IndexError):
-                raise ScanError("an offline v8 chart without a symbol: name the file <TICKER>.json")
-        sym = sym.upper().replace("-", ".")
+            raise ScanError("an offline v8 chart without a symbol: name the file <TICKER>.json")
+        sym = _norm_sym(sym, p)
         try:
             data[sym] = parse_chart(doc, sym)
         except ScanError as e:
             errors[sym] = str(e)
     elif isinstance(doc, dict):
         for k, v in doc.items():
-            _absorb(v, k, data, errors)
+            _absorb(v, k, data, errors, p=p)
     else:
         raise ScanError("offline file %s is not a spark answer, a v8 chart or a bundle" % name_hint)
 
 
-def load_offline(path):
+def load_offline(path, p=None):
     """A folder of <T>.json(.gz) files or one file -> ({SYM: series}, {SYM: error})."""
     data, errors = {}, {}
     if os.path.isdir(path):
@@ -345,15 +400,15 @@ def load_offline(path):
             except ValueError as e:
                 raise ScanError("%s is not valid JSON: %s" % (f, e))
             if isinstance(doc, dict) and ("chart" in doc or "spark" in doc):
-                _absorb(doc, "" if "spark" in doc else _stem(f), data, errors)
+                _absorb(doc, "" if "spark" in doc else _stem(f), data, errors, p=p)
             else:
-                _absorb(doc, "", data, errors)
+                _absorb(doc, "", data, errors, p=p)
     elif os.path.isfile(path):
         try:
             doc = json.loads(_read_maybe_gz(path))
         except ValueError as e:
             raise ScanError("%s is not valid JSON: %s" % (path, e))
-        _absorb(doc, "", data, errors)
+        _absorb(doc, "", data, errors, p=p)
     else:
         raise ScanError("no offline file or folder at %s" % path)
     return data, errors
@@ -444,6 +499,57 @@ def build_universe(texts):
     return sorted(kept.items()), counts, created
 
 
+def parse_idx_universe(text):
+    """IDX Daftar Saham CSV (',' or ';' separated) or plain text (one code per line) -> (kept, counts)."""
+    clean = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [ln for ln in clean.split("\n") if ln.strip()]
+    if not lines:
+        raise ScanError("empty universe file")
+    first = lines[0]
+    delim = ";" if ";" in first and first.count(";") >= first.count(",") else ","
+    kept, counts = {}, {"rows": 0, "keep": 0}
+    if delim in first:
+        rows = list(csv.reader(lines, delimiter=delim))
+        hdr = [" ".join(c.strip().lower().split()) for c in rows[0]]
+        if "kode" in hdr:
+            i_code = hdr.index("kode")
+            i_name = hdr.index("nama perusahaan") if "nama perusahaan" in hdr else (
+                hdr.index("nama") if "nama" in hdr else None)
+            i_board = hdr.index("papan pencatatan") if "papan pencatatan" in hdr else None
+            for r in rows[1:]:
+                if len(r) <= i_code:
+                    continue
+                sym = r[i_code].strip().upper()
+                if not sym:
+                    continue
+                if sym.endswith(".JK"):
+                    sym = sym[:-3]
+                counts["rows"] += 1
+                if i_board is not None and len(r) > i_board:
+                    board = " ".join(r[i_board].strip().lower().split())
+                    if board == "pemantauan khusus":
+                        counts["Pemantauan Khusus"] = counts.get("Pemantauan Khusus", 0) + 1
+                        continue
+                name = " ".join(r[i_name].split()) if i_name is not None and len(r) > i_name else ""
+                kept[sym] = name
+                counts["keep"] += 1
+            return sorted(kept.items()), counts
+    for ln in lines:
+        s = ln.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split("|", 1)
+        sym = parts[0].strip().upper()
+        if sym.endswith(".JK"):
+            sym = sym[:-3]
+        if not sym:
+            continue
+        counts["rows"] += 1
+        kept[sym] = " ".join(parts[1].split()) if len(parts) > 1 else ""
+        counts["keep"] += 1
+    return sorted(kept.items()), counts
+
+
 # ---------------------------------------------------------------- daily setups
 
 def rsi(closes, n=14):
@@ -459,18 +565,19 @@ def rsi(closes, n=14):
     return 100 - 100 / (1 + ag / al) if al else 100.0
 
 
-def daily_closes(series, now_utc):
+def daily_closes(series, now_utc, p=None):
     """[(date, close)] of COMPLETE daily bars: null closes dropped, today's bar dropped
     until the session closes, anything dated after the clock dropped."""
-    now = to_eastern(now_utc)
+    prof = p or _US
+    now = market.to_local(prof, now_utc)
     today = now.date()
-    s = session(today)
-    today_done = s is None or now.time() >= s[1]
+    sess = market.sessions(prof, today)
+    today_done = (not sess) or now.time() >= sess[-1][1]
     out = {}
     for ts, c in zip(series["t"], series["c"]):
         if c is None:
             continue
-        d = ts_to_eastern(ts).date()
+        d = ts_to_local(ts, prof).date()
         if d > today or (d == today and not today_done):
             continue
         out[d] = float(c)  # one bar a day: a late duplicate (the live tick) wins
@@ -503,7 +610,7 @@ def find_setups(closes):
                   "run_pct": run * 100, "range5_pct": rng5 * 100}
 
 
-def scan_daily(data, symbols, now_utc, min_price, min_volume):
+def scan_daily(data, symbols, now_utc, min_price, min_volume, min_value=0, p=None):
     """Pure. data = {SYM: series}. Returns (hits, counts, last_date)."""
     hits, dates = [], {}
     counts = {"requested": len(symbols), "fetched": 0, "illiquid": 0, "short": 0, "scanned": 0}
@@ -512,13 +619,20 @@ def scan_daily(data, symbols, now_utc, min_price, min_volume):
         if not s:
             continue
         counts["fetched"] += 1
-        bars = daily_closes(s, now_utc)
+        bars = daily_closes(s, now_utc, p=p)
         meta = s.get("meta") or {}
         price = meta.get("regularMarketPrice")
         if price is None and bars:
             price = bars[-1][1]
         vol = meta.get("regularMarketVolume")
-        if price is None or price < min_price or (min_volume > 0 and (vol is None or vol < min_volume)):
+        if vol is None and s.get("v"):
+            for vv in reversed(s["v"]):
+                if vv is not None:
+                    vol = vv
+                    break
+        if (price is None or price < min_price
+                or (min_volume > 0 and (vol is None or vol < min_volume))
+                or (min_value > 0 and (vol is None or price * vol < min_value))):
             counts["illiquid"] += 1
             continue
         if len(bars) < MIN_DAILY_BARS:
@@ -545,42 +659,57 @@ def slot(day, k):
     return datetime.datetime.combine(day, OPEN) + datetime.timedelta(minutes=BAR_MIN * k)
 
 
-def session_bars(series, day, cutoff):
-    """5-minute bars of `day` that are complete at `cutoff` (naive New York time),
+def expected_slots(day, cutoff, p=None):
+    """Expected 5-minute bar start datetimes on `day` up to `cutoff`, across all continuous sessions."""
+    prof = p or _US
+    sess = market.sessions(prof, day)
+    if not sess and prof.get("id") == "us":
+        sess = [(OPEN, CLOSE)]
+    step = datetime.timedelta(minutes=BAR_MIN)
+    out = []
+    for o, c in sess:
+        end_dt = min(datetime.datetime.combine(day, c), cutoff)
+        cur = datetime.datetime.combine(day, o)
+        while cur + step <= end_dt:
+            out.append(cur)
+            cur += step
+    return out
+
+
+def session_bars(series, day, cutoff, p=None):
+    """5-minute bars of `day` that are complete at `cutoff` (naive local time),
     on the grid, with a close. Sorted, one per slot."""
-    s = session(day)
-    close_t = s[1] if s else CLOSE
+    prof = p or _US
+    sess = market.sessions(prof, day)
+    if not sess and prof.get("id") == "us":
+        sess = [(OPEN, CLOSE)]
     out = {}
     hs, ls = series.get("h"), series.get("l")
     for i, ts in enumerate(series["t"]):
         c = series["c"][i]
         if c is None:
             continue
-        et = ts_to_eastern(ts)
-        if et.date() != day or et.second or et.minute % BAR_MIN:
+        lt = ts_to_local(ts, prof)
+        if lt.date() != day or lt.second or lt.minute % BAR_MIN:
             continue  # another day, or the live tick off the grid
-        if et.time() < OPEN or et.time() >= close_t:
-            continue  # pre-market, after hours, the 4:00 PM closing print
-        if et + datetime.timedelta(minutes=BAR_MIN) > cutoff:
+        if not any(o <= lt.time() < cl for o, cl in sess):
+            continue  # pre-market, lunch break, after hours, or closing auction
+        if lt + datetime.timedelta(minutes=BAR_MIN) > cutoff:
             continue  # still in progress at the cutoff
         v = series.get("v")
-        out[et] = {"start": et, "c": float(c),
+        out[lt] = {"start": lt, "c": float(c),
                    "h": None if not hs or hs[i] is None else float(hs[i]),
                    "l": None if not ls or ls[i] is None else float(ls[i]),
                    "v": (v[i] or 0) if v else 0}
     return [out[k] for k in sorted(out)]
 
 
-def usable(bars, day, cutoff, n_range):
-    """Every slot from 9:30 to the cutoff is there, and at least the range."""
-    want = int((cutoff - slot(day, 0)).total_seconds() // (BAR_MIN * 60))
-    s = session(day)
-    if s:
-        want = min(want, int((datetime.datetime.combine(day, s[1]) - slot(day, 0)).total_seconds()
-                             // (BAR_MIN * 60)))
-    if want < n_range or len(bars) != want:
+def usable(bars, day, cutoff, n_range, p=None):
+    """Every expected session slot up to the cutoff is there, and at least the range."""
+    want = expected_slots(day, cutoff, p=p)
+    if len(want) < n_range or len(bars) != len(want):
         return False
-    return all(b["start"] == slot(day, k) for k, b in enumerate(bars))
+    return all(b["start"] == w for b, w in zip(bars, want))
 
 
 def orb_candidate(bars, n_range):
@@ -608,47 +737,51 @@ def orb_hit(bars, n_range):
     return None
 
 
-def orb_window(now_utc, at, or_minutes, until, explicit_day=None):
-    """-> (day, cutoff naive ET) or raise ScanError with the plain message."""
-    now = to_eastern(now_utc)
+def orb_window(now_utc, at, or_minutes, until, explicit_day=None, p=None):
+    """-> (day, cutoff naive local) or raise ScanError with the plain message."""
+    prof = p or _US
+    tz = _tz_label(prof)
+    now = market.to_local(prof, now_utc)
     day = explicit_day or now.date()
     if or_minutes < BAR_MIN or or_minutes % BAR_MIN or or_minutes > 120:
         raise ScanError("--or-minutes wants a multiple of 5 from 5 to 120 (15 is the classic)")
-    ok, why = trading_day(day)
+    ok, why = trading_day(day, prof)
     if not ok:
         raise ScanError("No session on %s (%s): the market is closed. Run orb on a trading day "
                         "after the opening range, or replay a past day with --offline." % (day_label(day), why))
-    s = session(day)
-    range_end = slot(day, or_minutes // BAR_MIN)
+    sess = market.sessions(prof, day)
+    open_t, close_t = sess[0][0], sess[-1][1]
+    open_dt = datetime.datetime.combine(day, open_t)
+    range_end = open_dt + datetime.timedelta(minutes=or_minutes)
     first_close = range_end + datetime.timedelta(minutes=BAR_MIN)
-    close_dt = datetime.datetime.combine(day, s[1])
+    close_dt = datetime.datetime.combine(day, close_t)
     if at is not None:
         cutoff = datetime.datetime.combine(day, at)
         if explicit_day is None and cutoff > now + datetime.timedelta(seconds=59):
-            raise ScanError("--at %s is later than now (%s ET)." % (at.strftime("%H:%M"), clock_label(now)))
+            raise ScanError("--at %s is later than now (%s %s)." % (at.strftime("%H:%M"), clock_label(now), tz))
         if cutoff > close_dt:
             raise ScanError("--at %s is after the %s close on %s." % (at.strftime("%H:%M"), clock_label(close_dt),
                                                                        day_label(day)))
     else:
         cutoff = now.replace(second=0, microsecond=0)
         if cutoff >= close_dt:
-            raise ScanError("The market closed at %s ET on %s. Replay the session with --at 10:15."
-                            % (clock_label(close_dt), day_label(day)))
+            raise ScanError("The market closed at %s %s on %s. Replay the session with --at 10:15."
+                            % (clock_label(close_dt), tz, day_label(day)))
     if cutoff < first_close:
-        raise ScanError("It is %s ET: the %d-minute opening range runs 9:30 to %s and the first bar after it "
+        raise ScanError("It is %s %s: the %d-minute opening range runs %d:%02d to %s and the first bar after it "
                         "closes at %s. Run orb again after %s."
-                        % (clock_label(cutoff), or_minutes, clock_label(range_end), clock_label(first_close),
-                           clock_label(first_close)))
+                        % (clock_label(cutoff), tz, or_minutes, open_t.hour, open_t.minute,
+                           clock_label(range_end), clock_label(first_close), clock_label(first_close)))
     if until is not None and cutoff.time() > until:
-        raise ScanError("It is %s ET, after %s, your last time for new entries (no_entries_after): an "
+        raise ScanError("It is %s %s, after %s, your last time for new entries (no_entries_after): an "
                         "opening-range breakout found now is expired. Run orb tomorrow after %s, or replay "
-                        "today with --at 10:15." % (clock_label(cutoff), until.strftime("%H:%M"),
+                        "today with --at 10:15." % (clock_label(cutoff), tz, until.strftime("%H:%M"),
                                                       clock_label(first_close)))
     return day, cutoff
 
 
 def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume=0, confirm=None,
-             max_confirm=None):
+             max_confirm=None, p=None):
     """stage1 = {SYM: series} with closes (spark or v8). confirm(sym) -> series with highs/lows
     (None = use the stage-1 series). With confirm and max_confirm, only the max_confirm most
     traded candidates (price x volume so far) are confirmed; the rest are counted as unconfirmed.
@@ -662,8 +795,8 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
         if not s:
             continue
         counts["fetched"] += 1
-        bars = session_bars(s, day, cutoff)
-        if not usable(bars, day, cutoff, n_range):
+        bars = session_bars(s, day, cutoff, p=p)
+        if not usable(bars, day, cutoff, n_range, p=p):
             counts["unusable"] += 1
             continue
         vol = sum(b["v"] for b in bars) if s.get("v") else (s.get("meta") or {}).get("regularMarketVolume") or 0
@@ -686,8 +819,8 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
             except ScanError as e:
                 failed[sym] = str(e)
                 continue
-            full = session_bars(s2, day, cutoff)
-            if not usable(full, day, cutoff, n_range):
+            full = session_bars(s2, day, cutoff, p=p)
+            if not usable(full, day, cutoff, n_range, p=p):
                 failed[sym] = "the v8 chart has a missing bar"
                 continue
         counts["confirmed"] += 1
@@ -708,16 +841,16 @@ def progress(a, msg):
         print(msg, file=sys.stderr)
 
 
-def fetch_spark(symbols, rng, interval, pause, a=None):
+def fetch_spark(symbols, rng, interval, pause, a=None, p=None):
     """Batches of 20. -> ({SYM: series}, {SYM: error})."""
     data, failed = {}, {}
     batches = [symbols[i:i + SPARK_MAX] for i in range(0, len(symbols), SPARK_MAX)]
     for k, batch in enumerate(batches):
         if k and pause:
             SLEEP(pause)
-        wanted = {to_yahoo(s): s for s in batch}
+        wanted = {to_yahoo(s, p): s for s in batch}
         try:
-            got = parse_spark(yahoo_get(spark_path(batch, rng, interval)), wanted)
+            got = parse_spark(yahoo_get(spark_path(batch, rng, interval, p)), wanted, p=p)
         except (ScanError, ValueError) as e:
             for s in batch:
                 failed[s] = str(e)
@@ -732,7 +865,7 @@ def fetch_spark(symbols, rng, interval, pause, a=None):
     return data, failed
 
 
-def read_symbols(a, offline_syms=None):
+def read_symbols(a, offline_syms=None, p=None):
     if a.symbols:
         syms = [s for s in re.split(r"[,\s]+", a.symbols.upper()) if s]
     elif a.watchlist:
@@ -746,8 +879,9 @@ def read_symbols(a, offline_syms=None):
         syms = symbols_from_file(path)
     out = []
     for s in syms:
-        if s not in out:
-            out.append(s)
+        ns = _norm_sym(s, p) if (p and p.get("yahoo_suffix")) else s
+        if ns not in out:
+            out.append(ns)
     if a.limit:
         out = out[:a.limit]
     if not out:
@@ -803,6 +937,36 @@ def money(x):
 
 def cmd_universe(a):
     t0 = time.time()
+    p = market.from_config(a.config)
+    if p["id"] == "idx" or a.from_file:
+        if not a.from_file:
+            raise ScanError("IDX universe requires --from <file> (e.g. --from data\\daftar-saham.csv); "
+                            "automatic download from idx.co.id is not used")
+        if not os.path.exists(a.from_file):
+            raise ScanError("no universe file at %s" % a.from_file)
+        with open(a.from_file, encoding="utf-8-sig", errors="replace") as fh:
+            kept, counts = parse_idx_universe(fh.read())
+        if not a.no_write:
+            d = os.path.dirname(a.out)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(a.out, "w", encoding="utf-8") as fh:
+                for sym, name in kept:
+                    fh.write("%s|%s\n" % (sym, name) if name else "%s\n" % sym)
+        dropped = {k: v for k, v in counts.items() if k not in ("keep", "rows")}
+        if a.json:
+            print(json.dumps({"count": len(kept), "rows": counts.get("rows", 0),
+                              "dropped": dropped, "out": None if a.no_write else a.out,
+                              "seconds": round(time.time() - t0, 1)}, indent=2))
+        else:
+            print("IDX symbol list (%s): %s rows." % (a.from_file, "{:,}".format(counts.get("rows", 0))))
+            print("Kept %s IDX stocks." % "{:,}".format(len(kept)))
+            if dropped:
+                print("Dropped: " + ", ".join("%s %s" % ("{:,}".format(v), k)
+                                              for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])) + ".")
+            if not a.no_write:
+                print("Wrote %s (one SYMBOL|Name a line)." % a.out)
+        return 0 if kept else 1
     texts = {}
     for k, fname in enumerate(NASDAQ_FILES):
         if a.offline:
@@ -846,23 +1010,35 @@ def cmd_universe(a):
 
 def cmd_daily(a):
     t0 = time.time()
-    now = parse_now(a.now)
+    cfg = read_config(a.config)
+    p = market.from_config(cfg)
+    is_idx = p["id"] == "idx"
+    min_price = a.min_price if a.min_price is not None else (100.0 if is_idx else 5.0)
+    min_volume = a.min_volume if a.min_volume is not None else (0 if is_idx else 1000000)
+    min_value = a.min_value if a.min_value is not None else (
+        float(cfg.get("min_value_idr", 5000000000)) if is_idx else 0.0)
+    now = _parse_now_in(a.now, p)
     offline_syms = None
     if a.offline:
-        data, failed = load_offline(a.offline)
+        data, failed = load_offline(a.offline, p=p)
         offline_syms = sorted(set(data) | set(failed))
-    symbols = read_symbols(a, offline_syms)
+    symbols = read_symbols(a, offline_syms, p=p)
     if not a.offline:
         progress(a, "Fetching daily closes for %s symbols (%d spark requests)..."
                  % ("{:,}".format(len(symbols)), (len(symbols) + SPARK_MAX - 1) // SPARK_MAX))
-        data, failed = fetch_spark(symbols, "3mo", "1d", a.pause, a)
-    hits, counts, last_date = scan_daily(data, symbols, now, a.min_price, a.min_volume)
+        data, failed = fetch_spark(symbols, "3mo", "1d", a.pause, a, p=p)
+    hits, counts, last_date = scan_daily(data, symbols, now, min_price, min_volume, min_value=min_value, p=p)
     nfailed = len(symbols) - counts["fetched"]
     as_of = ("%s close" % last_date.isoformat()) if last_date else None
+    delay = _delay_line(p)
     doc = {"created_by": "trader-scanner", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "daily",
            "as_of": as_of, "universe": len(symbols), "scanned": counts["scanned"], "failed": nfailed,
-           "source": "yahoo", "filters": {"min_price": a.min_price, "min_volume": a.min_volume},
+           "source": "yahoo", "filters": {"min_price": min_price, "min_volume": min_volume},
            "note": NOTE, "hits": hits}
+    if min_value > 0:
+        doc["filters"]["min_value"] = min_value
+    if delay:
+        doc["delay_notice"] = delay
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
     if not a.no_write:
@@ -870,14 +1046,18 @@ def cmd_daily(a):
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
-    local = to_eastern(now)
-    print("Daily scan, %s ET, closes through %s (Yahoo spark, daily closes only)." % (
-        local.strftime("%a %Y-%m-%d %H:%M"), last_date.isoformat() if last_date else "nothing"))
-    print("Fetched %s of %s charts%s. %s passed the liquidity filter ($%s+ and %s+ shares)%s; "
+    local = market.to_local(p, now)
+    tz = _tz_label(p)
+    print("Daily scan, %s %s, closes through %s (Yahoo spark, daily closes only)." % (
+        local.strftime("%a %Y-%m-%d %H:%M"), tz, last_date.isoformat() if last_date else "nothing"))
+    if min_value > 0:
+        liq_desc = "%s+ and %s+ traded value" % (_fmt_price(min_price, p), _fmt_price(min_value, p))
+    else:
+        liq_desc = "$%s+ and %s+ shares" % (_n(min_price), "{:,}".format(min_volume))
+    print("Fetched %s of %s charts%s. %s passed the liquidity filter (%s)%s; "
           "%s scanned." % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
                            (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
-                           "{:,}".format(counts["fetched"] - counts["illiquid"]), _n(a.min_price),
-                           "{:,}".format(a.min_volume),
+                           "{:,}".format(counts["fetched"] - counts["illiquid"]), liq_desc,
                            (", %d had under %d days" % (counts["short"], MIN_DAILY_BARS)) if counts["short"] else "",
                            "{:,}".format(counts["scanned"])))
     if hits:
@@ -888,12 +1068,14 @@ def cmd_daily(a):
     else:
         print("No setups.")
     for h in hits[:a.show]:
-        print("  %-6s %10s  RSI %5.1f  %s" % (h["symbol"], money(h["price"]), h["rsi"],
+        print("  %-6s %10s  RSI %5.1f  %s" % (h["symbol"], _fmt_price(h["price"], p), h["rsi"],
                                               ", ".join(LABEL[t] for t in h["setups"])))
     if len(hits) > a.show:
         print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     if not a.no_write:
         print("Wrote %s (mode daily, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
+    if delay:
+        print(delay)
     print(NOTE + " Next: pick one chart, then /trader-news TICKER.")
     return 0 if hits else 1
 
@@ -905,33 +1087,38 @@ def _n(x):
 
 def cmd_orb(a):
     t0 = time.time()
-    now = parse_now(a.now)
-    at = parse_hhmm(a.at) if a.at else None
     cfg = read_config(a.config)
+    p = market.from_config(cfg)
+    is_idx = p["id"] == "idx"
+    min_price = a.min_price if a.min_price is not None else (100.0 if is_idx else 5.0)
+    min_volume = a.min_volume if a.min_volume is not None else 0
+    tz = _tz_label(p)
+    now = _parse_now_in(a.now, p)
+    at = parse_hhmm(a.at) if a.at else None
     until = parse_hhmm(a.until or cfg.get("no_entries_after") or "15:30", "--until")
     data = failed = None
     explicit_day = None
     offline_syms = None
     if a.offline:
-        data, failed = load_offline(a.offline)
+        data, failed = load_offline(a.offline, p=p)
         offline_syms = sorted(set(data) | set(failed))
         if not a.now:
-            days = [ts_to_eastern(s["t"][-1]).date() for s in data.values() if s["t"]]
+            days = [ts_to_local(s["t"][-1], p).date() for s in data.values() if s["t"]]
             if days:
                 explicit_day = max(days)
                 if at is None:
                     raise ScanError("offline replay: give --at HH:MM or --now \"YYYY-MM-DD HH:MM\"")
-    day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day)
-    symbols = read_symbols(a, offline_syms)
+    day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day, p=p)
+    symbols = read_symbols(a, offline_syms, p=p)
     confirm = None
     if not a.offline:
-        today = to_eastern(parse_now(None)).date()
+        today = market.to_local(p, parse_now(None)).date()
         if (today - day).days > 6:
             raise ScanError("Yahoo's free 5-minute history is short: replay %s with --offline" % day.isoformat())
         rng = "1d" if day == today else "5d"
         progress(a, "Stage 1: 5-minute closes for %s symbols (%d spark requests)..."
                  % ("{:,}".format(len(symbols)), (len(symbols) + SPARK_MAX - 1) // SPARK_MAX))
-        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a)
+        data, failed = fetch_spark(symbols, rng, "%dm" % BAR_MIN, a.pause, a, p=p)
         done = []
 
         def confirm(sym):
@@ -940,18 +1127,21 @@ def cmd_orb(a):
             done.append(sym)
             if len(done) % 50 == 0:
                 progress(a, "  stage 2: %d v8 charts so far" % len(done))
-            return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN)), sym)
-    hits, counts, failed2 = scan_orb(data, symbols, day, cutoff, a.or_minutes, a.min_price, a.min_volume, confirm,
-                                     a.max_confirm)
+            return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN, p)), sym)
+    hits, counts, failed2 = scan_orb(data, symbols, day, cutoff, a.or_minutes, min_price, min_volume, confirm,
+                                     a.max_confirm, p=p)
     failed = dict(failed or {})
     failed.update(failed2)
     nfailed = len([s for s in symbols if s in failed])
-    as_of = "%s %s ET" % (day.isoformat(), cutoff.strftime("%H:%M"))
+    as_of = "%s %s %s" % (day.isoformat(), cutoff.strftime("%H:%M"), tz)
+    delay = _delay_line(p)
     doc = {"created_by": "trader-scanner", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "orb",
            "as_of": as_of, "universe": len(symbols), "scanned": counts["scanned"], "failed": nfailed,
            "unconfirmed": counts["unconfirmed"], "source": "yahoo", "or_minutes": a.or_minutes,
            "interval": "%dm" % BAR_MIN,
-           "filters": {"min_price": a.min_price, "min_volume": a.min_volume}, "note": NOTE, "hits": hits}
+           "filters": {"min_price": min_price, "min_volume": min_volume}, "note": NOTE, "hits": hits}
+    if delay:
+        doc["delay_notice"] = delay
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
     if not a.no_write:
@@ -959,8 +1149,13 @@ def cmd_orb(a):
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
-    print("Opening-range breakout scan, %s %s ET: %d-minute range (9:30 to %s), 5-minute bars, Yahoo."
-          % (day_label(day), clock_label(cutoff), a.or_minutes, clock_label(slot(day, a.or_minutes // BAR_MIN))))
+    sess = market.sessions(p, day)
+    open_t = sess[0][0]
+    open_dt = datetime.datetime.combine(day, open_t)
+    range_end = open_dt + datetime.timedelta(minutes=a.or_minutes)
+    print("Opening-range breakout scan, %s %s %s: %d-minute range (%d:%02d to %s), 5-minute bars, Yahoo."
+          % (day_label(day), clock_label(cutoff), tz, a.or_minutes, open_t.hour, open_t.minute,
+             clock_label(range_end)))
     print("Fetched %s of %s charts%s; %s usable%s; %s candidates, %s confirmed with real highs and lows."
           % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
              (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
@@ -976,13 +1171,15 @@ def cmd_orb(a):
                  else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
         for h in hits[:a.show]:
             print("  %8s  %-6s %10s  range %s to %s  %+.2f%% over" % (
-                h["at"], h["symbol"], money(h["price"]), _p(h["or_low"]), _p(h["or_high"]), h["pct_over"]))
+                h["at"], h["symbol"], _fmt_price(h["price"], p), _p(h["or_low"]), _p(h["or_high"]), h["pct_over"]))
         if len(hits) > a.show:
             print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     else:
         print("No chart closed above its opening-range high by %s." % clock_label(cutoff))
     if not a.no_write:
         print("Wrote %s (mode orb, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
+    if delay:
+        print(delay)
     print(NOTE + " Next: pick one chart, then /trader-news TICKER and /trader-entry TICKER.")
     return 0 if hits else 1
 
@@ -998,20 +1195,22 @@ def main(argv=None):
     p = sub.add_parser("universe", help="download Nasdaq Trader's lists -> trader/universe.txt")
     p.add_argument("--out", default=DEFAULT_UNIVERSE)
     p.add_argument("--offline", metavar="DIR", help="a folder with nasdaqlisted.txt and otherlisted.txt")
+    p.add_argument("--from", dest="from_file", metavar="FILE", help="IDX Daftar Saham CSV or plain text list")
+    p.add_argument("--config", default="trader/config.json")
     p.add_argument("--no-write", action="store_true")
     p.add_argument("--pause", type=float, default=PAUSE)
     p.add_argument("--json", action="store_true")
 
-    def common(p, min_price, min_volume):
+    def common(p):
         g = p.add_mutually_exclusive_group()
         g.add_argument("--symbols", help="comma-separated tickers instead of the universe")
         g.add_argument("--watchlist", metavar="FILE", help="a watchlist.json (hits) or a text file of tickers")
         p.add_argument("--universe", help="symbol list, one SYMBOL|Name a line (default %s)" % DEFAULT_UNIVERSE)
         p.add_argument("--limit", type=int, help="scan only the first N symbols")
-        p.add_argument("--min-price", type=float, default=min_price)
-        p.add_argument("--min-volume", type=int, default=min_volume)
+        p.add_argument("--min-price", type=float, default=None)
+        p.add_argument("--min-volume", type=int, default=None)
         p.add_argument("--offline", metavar="PATH", help="fixture folder or file instead of the network")
-        p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" New York, or ...Z)')
+        p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" local, or ...Z)')
         p.add_argument("--out", default="trader/watchlist.json")
         p.add_argument("--no-write", action="store_true")
         p.add_argument("--pause", type=float, default=PAUSE, help="seconds between requests (%.1f)" % PAUSE)
@@ -1020,9 +1219,11 @@ def main(argv=None):
         p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("daily", help="pre-market setups from daily closes")
-    common(p, 5.0, 1000000)
+    common(p)
+    p.add_argument("--min-value", type=float, default=None, help="minimum daily traded value (price x volume)")
+    p.add_argument("--config", default="trader/config.json")
     p = sub.add_parser("orb", help="opening-range breakouts so far today")
-    common(p, 5.0, 0)
+    common(p)
     p.add_argument("--or-minutes", type=int, default=15)
     p.add_argument("--max-confirm", type=int, default=MAX_CONFIRM,
                    help="v8 charts to fetch in stage 2, most traded first (%d; 0 = all)" % MAX_CONFIRM)
