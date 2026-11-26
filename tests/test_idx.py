@@ -18,6 +18,7 @@ market = load("trader-core", "market")
 scan = load("trader-scanner", "scan")
 entry = load("trader-entry", "entry")
 exitp = load("trader-exit", "exit")
+alerts = load("trader-alerts", "alerts")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -311,6 +312,69 @@ class IdxExitTest(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("Exit plan: BBCA.JK long", out)
         self.assertIn("the price can gap after the lunch break", out)
+
+
+class IdxAlertsTest(unittest.TestCase):
+    def setUp(self):
+        self.idx = market.load("idx")
+
+    def st(self, text):
+        return alerts.market_status(alerts.parse_now(text, p=self.idx), p=self.idx)
+
+    def test_idx_market_status_all_six_states_and_friday(self):
+        # Monday 2026-11-23
+        self.assertEqual((self.st("2026-11-23 08:30")["status"], self.st("2026-11-23 08:30")["open"]),
+                         ("pre-open", False))
+        self.assertEqual((self.st("2026-11-23 09:00")["status"], self.st("2026-11-23 09:00")["open"]),
+                         ("session 1", True))
+        mon_lunch = self.st("2026-11-23 12:30")
+        self.assertEqual((mon_lunch["status"], mon_lunch["open"], mon_lunch["next_open"]),
+                         ("lunch break", False, "2026-11-23 13:30"))
+        self.assertEqual((self.st("2026-11-23 13:30")["status"], self.st("2026-11-23 13:30")["open"]),
+                         ("session 2", True))
+        self.assertEqual((self.st("2026-11-23 15:55")["status"], self.st("2026-11-23 15:55")["open"]),
+                         ("pre-closing", False))
+        self.assertEqual((self.st("2026-11-23 16:05")["status"], self.st("2026-11-23 16:05")["open"]),
+                         ("closed", False))
+
+        # Friday 2026-11-20
+        self.assertEqual(self.st("2026-11-20 11:25")["status"], "session 1")
+        fri_lunch = self.st("2026-11-20 13:45")
+        self.assertEqual((fri_lunch["status"], fri_lunch["next_open"]), ("lunch break", "2026-11-20 14:00"))
+        self.assertEqual(self.st("2026-11-20 14:00")["status"], "session 2")
+
+        # Weekend and holiday
+        self.assertEqual(self.st("2026-11-21 10:00")["status"], "closed")
+        self.assertEqual(self.st("2026-08-17 10:00")["status"], "closed")
+
+    def test_opening_bell_and_flat_by_and_yahoo_only(self):
+        bell = [{"id": "bell", "type": "opening_bell"}]
+        t_pre = alerts.parse_now("2026-11-23 08:59", p=self.idx)
+        self.assertEqual(alerts.evaluate(bell, {}, self.st("2026-11-23 08:59"), {}, t_pre, p=self.idx)[0], [])
+        t_open = alerts.parse_now("2026-11-23 09:00", p=self.idx)
+        rings, state = alerts.evaluate(bell, {}, self.st("2026-11-23 09:00"), {}, t_open, p=self.idx)
+        self.assertEqual(len(rings), 1)
+        self.assertIn("IDX is open", rings[0]["message"])
+        # Does not re-fire in session 2
+        t_s2 = alerts.parse_now("2026-11-23 13:30", p=self.idx)
+        self.assertEqual(alerts.evaluate(bell, {}, self.st("2026-11-23 13:30"), state, t_s2, p=self.idx)[0], [])
+
+        # Flat-by defaults to 15:45 from IDX profile
+        rules = alerts.rules_from_plan({"symbol": "BBCA", "stop": 5450, "target": 5750, "market": "idx"})
+        flat_rule = [r for r in rules if r["type"] == "time"]
+        self.assertEqual(flat_rule[0]["at"], "15:45")
+        t_1544 = alerts.parse_now("2026-11-23 15:44", p=self.idx)
+        self.assertEqual(alerts.evaluate(flat_rule, {}, self.st("2026-11-23 15:44"), {}, t_1544, p=self.idx)[0], [])
+        t_1545 = alerts.parse_now("2026-11-23 15:45", p=self.idx)
+        rings, _ = alerts.evaluate(flat_rule, {}, self.st("2026-11-23 15:45"), {}, t_1545, p=self.idx)
+        self.assertEqual(len(rings), 1)
+        self.assertIn("15:45 WIB", rings[0]["message"])
+
+        # Yahoo .JK only; stooq refused
+        self.assertIn("/BBCA.JK?", alerts.yahoo_url("BBCA", p=self.idx))
+        with self.assertRaises(alerts.AlertError) as cm:
+            alerts.get_quotes(["BBCA"], source="stooq", p=self.idx)
+        self.assertIn("stooq has no IDX quotes", str(cm.exception))
 
 
 if __name__ == "__main__":
