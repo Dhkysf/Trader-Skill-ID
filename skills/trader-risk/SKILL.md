@@ -160,6 +160,18 @@ It never places an order, never edits an order to make it pass, never
 loosens a limit, never blocks a sell that only gets the user out, and never
 treats a PASS as the user's yes.
 
+## IDX (Indonesian stocks)
+
+When `"market": "idx"` is set in `trader/config.json`:
+
+- **lot**: blocks any order whose `qty` is not a multiple of 100 shares (or uses `notional`).
+- **tick**: blocks any price not on a valid IDX tick (`markets/idx.json`).
+- **ar_band**: blocks entry, stop, or target outside today's ARA/ARB band (from `prev_close`).
+- **window**: blocks entries during the lunch break (Mon-Thu 12:00-13:30, Fri 11:30-14:00 WIB), pre-closing (15:50-16:00 WIB), or outside the entry window.
+- **short / margin**: always blocked on IDX.
+- **loss**: max loss per trade includes buy and sell fees.
+- **pdt_guard**: not used on IDX.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

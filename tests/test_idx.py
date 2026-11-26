@@ -22,6 +22,7 @@ exitp = load("trader-exit", "exit")
 alerts = load("trader-alerts", "alerts")
 tm = load("trader-timemachine", "timemachine")
 size = load("trader-budget", "size")
+check = load("trader-risk", "check")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -620,6 +621,102 @@ class IdxBudgetTest(unittest.TestCase):
                 doc = json.load(fh)
             self.assertEqual(doc["orders"][0]["qty"], "300")
             self.assertEqual(doc["orders"][0]["market"], "idx")
+
+
+class IdxRiskTest(unittest.TestCase):
+    """Offline BBCA risk-check tests for IDX lots, ticks, ARA/ARB, windows, short/margin, and PDT."""
+
+    def setUp(self):
+        with open(BBCA_PLAN, encoding="utf-8") as fh:
+            self.plan = json.load(fh)
+        self.idx = market.load("idx")
+        self.cfg = {"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}
+        self.order = size.bracket_order(size.size_trade(self.plan, self.cfg, today="2026-11-23"))
+
+    def _at(self, text):
+        return check.parse_now(text, p=self.idx)
+
+    def test_valid_bbca_passes_session1_and_session2(self):
+        for ts in ("2026-11-23 10:15", "2026-11-23 14:00"):
+            res = check.check([self.order], self.cfg, now=self._at(ts))
+            self.assertEqual(res["results"][0]["verdict"], "PASS", res["results"][0]["reasons"])
+
+    def test_lot_and_tick_blocks(self):
+        bad_lot = dict(self.order, qty="150")
+        res = check.check([bad_lot], self.cfg, now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("lot:") for r in res["results"][0]["reasons"]))
+
+        bad_tick = dict(self.order, type="limit", limit_price="9880", stop_loss_stop_price="9710",
+                        take_profit_limit_price="10210",
+                        plan=dict(self.order["plan"], entry=9880.0, stop=9710.0, target=10210.0))
+        res_t = check.check([bad_tick], self.cfg, now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_t["results"][0]["verdict"], "BLOCK")
+        tick_reasons = [r for r in res_t["results"][0]["reasons"] if r.startswith("tick:")]
+        self.assertGreaterEqual(len(tick_reasons), 3)
+
+    def test_ar_band_blocks(self):
+        # prev_close=9800 -> ARB=9125, ARA=11750
+        bad_stop = dict(self.order, stop_loss_stop_price="9100",
+                        plan=dict(self.order["plan"], stop=9100.0))
+        res_s = check.check([bad_stop], self.cfg, now=self._at("2026-11-23 10:15"))
+        self.assertTrue(any(r.startswith("ar_band: stop") for r in res_s["results"][0]["reasons"]))
+
+        bad_target = dict(self.order, take_profit_limit_price="11800",
+                          plan=dict(self.order["plan"], target=11800.0))
+        res_t = check.check([bad_target], self.cfg, now=self._at("2026-11-23 10:15"))
+        self.assertTrue(any(r.startswith("ar_band: target") for r in res_t["results"][0]["reasons"]))
+
+        bad_entry = dict(self.order, type="limit", limit_price="11800",
+                         take_profit_limit_price="12000",
+                         plan=dict(self.order["plan"], entry=11800.0, target=12000.0))
+        res_e = check.check([bad_entry], self.cfg, now=self._at("2026-11-23 10:15"))
+        self.assertTrue(any(r.startswith("ar_band: entry") for r in res_e["results"][0]["reasons"]))
+
+    def test_windows_lunch_preclosing_and_outside(self):
+        cases = [
+            ("2026-11-23 12:30", "window: lunch break"),
+            ("2026-11-20 11:45", "window: lunch break"),
+            ("2026-11-23 15:52", "window: pre-closing"),
+            ("2026-11-23 09:10", "window: no new entries before"),
+            ("2026-11-23 15:35", "window: no new entries after"),
+            ("2026-11-23 16:05", "window: the market is closed"),
+        ]
+        for ts, prefix in cases:
+            res = check.check([self.order], self.cfg, now=self._at(ts))
+            self.assertEqual(res["results"][0]["verdict"], "BLOCK", ts)
+            self.assertTrue(any(r.startswith(prefix) for r in res["results"][0]["reasons"]), (ts, res["results"][0]["reasons"]))
+
+    def test_short_margin_and_fee_inclusive_loss_blocks(self):
+        short_ord = dict(self.order, side="sell")
+        res_sh = check.check([short_ord], dict(self.cfg, allow_short=True), now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_sh["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("short:") for r in res_sh["results"][0]["reasons"]))
+
+        res_mg = check.check([self.order], dict(self.cfg, budget=1000000, allow_margin=True),
+                             now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_mg["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("cash:") and "margin" in r for r in res_mg["results"][0]["reasons"]))
+
+        # 3 lots BBCA: price-only loss 52.500, incl. fees 64.219 -> blocked at 60.000, passes at 65.000
+        res_loss = check.check([self.order], dict(self.cfg, max_loss_per_trade=60000),
+                               now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_loss["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("loss:") for r in res_loss["results"][0]["reasons"]))
+
+    def test_pdt_guard_not_used_on_idx(self):
+        st = {"orders": [
+            {"symbol": "TLKM", "side": "buy", "status": "placed", "date": "2026-11-18"},
+            {"symbol": "TLKM", "side": "sell", "status": "filled", "date": "2026-11-18", "kind": "exit"},
+            {"symbol": "BBRI", "side": "buy", "status": "placed", "date": "2026-11-19"},
+            {"symbol": "BBRI", "side": "sell", "status": "filled", "date": "2026-11-19", "kind": "exit"},
+            {"symbol": "ASII", "side": "buy", "status": "placed", "date": "2026-11-20"},
+            {"symbol": "ASII", "side": "sell", "status": "filled", "date": "2026-11-20", "kind": "exit"},
+        ]}
+        res = check.check([self.order], dict(self.cfg, pdt_guard=True), state=st, now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res["results"][0]["verdict"], "PASS")
+        self.assertEqual(res["today"]["pdt_guard"], "not used on IDX")
+        self.assertIn("pdt_guard: not used on IDX", check.report(res))
 
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):
