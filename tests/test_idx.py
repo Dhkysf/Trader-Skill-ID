@@ -23,6 +23,7 @@ alerts = load("trader-alerts", "alerts")
 tm = load("trader-timemachine", "timemachine")
 size = load("trader-budget", "size")
 check = load("trader-risk", "check")
+ticket = load("trader-broker", "ticket")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -717,6 +718,103 @@ class IdxRiskTest(unittest.TestCase):
         self.assertEqual(res["results"][0]["verdict"], "PASS")
         self.assertEqual(res["today"]["pdt_guard"], "not used on IDX")
         self.assertIn("pdt_guard: not used on IDX", check.report(res))
+
+
+class IdxBrokerTest(unittest.TestCase):
+    """Offline end-to-end BBCA manual ticket tests (no Alpaca / MCP fields, explicit yes, journalling)."""
+
+    def _run_ticket(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = ticket.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_manual_bbca_ticket_flow_and_no_alpaca_fields(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            orders_p = os.path.join(d, "orders.json")
+            risk_p = os.path.join(d, "state", "risk.json")
+            state_p = os.path.join(d, "state", "broker.json")
+            pf_p = os.path.join(d, "portfolio.json")
+            none_p = os.path.join(d, "none")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 75000}, fh)
+
+            with redirect_stdout(io.StringIO()):
+                rc_s = size.main(["--plan", BBCA_PLAN, "--config", cfg_p, "--portfolio", none_p,
+                                  "--now", "2026-11-23 09:30", "--write", orders_p])
+            self.assertEqual(rc_s, 0)
+
+            with redirect_stdout(io.StringIO()):
+                rc_c = check.main(["--orders", orders_p, "--config", cfg_p, "--portfolio", pf_p,
+                                   "--prices", none_p, "--state", state_p, "--now", "2026-11-23 10:15",
+                                   "--out", risk_p])
+            self.assertEqual(rc_c, 0)
+
+            with open(orders_p, encoding="utf-8") as fh:
+                ord_doc = json.load(fh)["orders"][0]
+            self.assertIsNone(ticket.tool_input(ord_doc))
+
+            common = ["--orders", orders_p, "--config", cfg_p, "--risk", risk_p,
+                      "--state", state_p, "--now", "2026-11-23 10:15"]
+            code, text, err = self._run_ticket(["show", "--index", "1"] + common)
+            self.assertEqual(code, 0, err)
+            self.assertIn("ORDER 1 of 1, PAPER account, manual (IDX)", text)
+            self.assertIn(
+                "BUY 3 lots (300 shares) BBCA at Rp 9.875, stop Rp 9.700, target Rp 10.200, "
+                "max loss incl. fees Rp 64.219. Enter it in your broker app yourself.",
+                text,
+            )
+            for forbidden in ("Alpaca", "place_stock_order", "order_class", "take_profit_limit_price",
+                              "stop_loss_stop_price", "time_in_force", "tool_input"):
+                self.assertNotIn(forbidden, text)
+
+            code_j, jtext, _ = self._run_ticket(["show", "--index", "1", "--json"] + common)
+            self.assertEqual(code_j, 0)
+            jdoc = json.loads(jtext)
+            self.assertEqual(jdoc["broker"], "manual")
+            self.assertTrue(jdoc["manual"])
+            for forbidden in ("tool", "tool_input", "bracket", "order_class", "take_profit_limit_price"):
+                self.assertNotIn(forbidden, jdoc)
+
+            # Explicit yes required
+            self.assertEqual(self._run_ticket(["approve", "--index", "1", "--reply", "sure"] + common)[0], 1)
+            self.assertEqual(self._run_ticket(["approve", "--index", "1", "--reply", "yes to all"] + common)[0], 1)
+            self.assertEqual(self._run_ticket(["approve", "--index", "1", "--reply", "yes 4 lots"] + common)[0], 1)
+            code_a, out_a, _ = self._run_ticket(["approve", "--index", "1", "--reply", "yes 3 lots BBCA"] + common)
+            self.assertEqual(code_a, 0)
+            self.assertIn("Enter this order in your broker app yourself", out_a)
+            self.assertNotIn("place_stock_order", out_a)
+
+            # Result & fill journalling
+            code_r, _, err_r = self._run_ticket([
+                "result", "--index", "1", "--status", "placed", "--filled-qty", "300",
+                "--filled-price", "9875", "--portfolio", pf_p,
+            ] + common)
+            self.assertEqual(code_r, 0, err_r)
+            code_f, _, err_f = self._run_ticket([
+                "fill", "--symbol", "BBCA", "--side", "sell", "--qty", "300", "--price", "10200",
+                "--date", "2026-11-23", "--portfolio", pf_p, "--config", cfg_p, "--state", state_p,
+                "--now", "2026-11-23 15:00",
+            ])
+            self.assertEqual(code_f, 0, err_f)
+            with open(pf_p, encoding="utf-8") as fh:
+                pf = json.load(fh)
+            self.assertEqual((pf["cash"], pf["positions"]), (10097500.0, []))
+
+            code_l, out_l, _ = self._run_ticket(["log", "--state", state_p, "--config", cfg_p, "--now", "2026-11-23 15:05"])
+            self.assertEqual(code_l, 0)
+            self.assertIn("Rp 64.219", out_l)
+
+            # Editing order invalidates fingerprint
+            with open(orders_p, encoding="utf-8") as fh:
+                edited = json.load(fh)
+            edited["orders"][0]["qty"] = "400"
+            with open(orders_p, "w", encoding="utf-8") as fh:
+                json.dump(edited, fh)
+            code_e, text_e, _ = self._run_ticket(["show", "--index", "1"] + common)
+            self.assertEqual(code_e, 1)
+            self.assertIn("was not in the last risk check", text_e)
 
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):

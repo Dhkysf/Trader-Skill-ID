@@ -200,6 +200,17 @@ the paper account. The `why` and the plan stay in the file; they are never sent.
 - Never calls `close_all_positions`, `cancel_all_orders`, option or crypto order tools on its own.
 - Never promises a fill price: a market order and a stop fill at whatever the market gives.
 
+## IDX (manual orders)
+
+IDX orders are **manual**: there is no Indonesian broker API or MCP server.
+When `"market": "idx"` is set in `trader/config.json`, `ticket.py show`
+prints a manual instruction (for example: `BUY 3 lots (300 shares) BBCA at
+Rp 9.875, stop Rp 9.700, target Rp 10.200, max loss incl. fees Rp 64.219.
+Enter it in your broker app yourself.`) with no Alpaca or MCP JSON.
+Explicit per-order `"yes"` (`ticket.py approve`), the `trader-risk` PASS
+fingerprint, `ticket.py result`, and `ticket.py fill` journalling all still
+apply.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

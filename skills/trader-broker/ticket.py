@@ -35,6 +35,7 @@ New York dates; --now "2026-10-19 10:15" pins the clock.
 
 import argparse
 import datetime
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import json
 import os
@@ -160,10 +161,22 @@ def _f(x):
         return None
 
 
-def tool_input(order):
+def _is_manual(cfg=None, p=None, order=None):
+    if p and p.get("id") == "idx":
+        return True
+    if cfg and (str(cfg.get("market") or "").lower() == "idx" or str(cfg.get("broker") or "").lower() == "manual"):
+        return True
+    if order and str(order.get("market") or "").lower() == "idx":
+        return True
+    return False
+
+
+def tool_input(order, p=None):
     """The exact arguments for place_stock_order: Alpaca's parameter names,
     numbers as strings (its signature types qty, notional and prices as str).
-    "why" and "plan" are ours and are never sent."""
+    "why" and "plan" are ours and are never sent. Returns None for manual IDX orders."""
+    if _is_manual(p=p, order=order):
+        return None
     out = {}
     for k in ALPACA_FIELDS:
         if k in order and order[k] is not None:
@@ -185,13 +198,15 @@ def is_bracket(order):
     return oc == "bracket" or (not oc and legs)
 
 
-def max_loss(order):
+def max_loss(order, p=None, cfg=None):
     """(dollars, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
     stop = _f(order.get("stop_loss_stop_price")) or _f((order.get("plan") or {}).get("stop"))
     q = _f(order.get("qty"))
     if not stop or not q:
         return None, stop
     plan = order.get("plan") or {}
+    buy_pct, sell_pct = market.fees(p, cfg) if p else (0.0, 0.0)
+    has_fees = buy_pct > 0 or sell_pct > 0
     if str(order.get("type", "market")) == "limit" and _f(order.get("limit_price")):
         entry = _f(order["limit_price"])
     elif _f(plan.get("max_loss")) is not None:
@@ -200,16 +215,45 @@ def max_loss(order):
         entry = _f(plan.get("entry"))
     if not entry:
         return None, stop
+    if has_fees:
+        d_e = market._to_decimal(entry)
+        d_s = market._to_decimal(stop)
+        d_b = market._to_decimal(buy_pct) / Decimal("100")
+        d_sl = market._to_decimal(sell_pct) / Decimal("100")
+        d_rps = abs(d_e - d_s) + d_e * d_b + d_s * d_sl
+        return float((d_rps * market._to_decimal(q)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), stop
     risk = abs(entry - stop)
     return round(q * int(round(risk * 100)) / 100.0, 2), stop
 
 
-def plain_parts(order, p=None):
+def plain_parts(order, p=None, cfg=None):
     """The ticket in plain words, one part per line."""
     side = str(order.get("side", "")).upper()
     sym = order.get("symbol", "?")
     typ = str(order.get("type", "market"))
     tif = TIF_WORDS.get(str(order.get("time_in_force", "day")), order.get("time_in_force"))
+    if p and p.get("id") == "idx":
+        lot = int(p.get("lot", 100))
+        q = _f(order.get("qty"))
+        if q is not None and abs(q - round(q)) < 1e-9 and int(round(q)) % lot == 0:
+            lots = int(round(q)) // lot
+            qty_s = "%d lot%s (%d shares)" % (lots, "" if lots == 1 else "s", int(round(q)))
+        else:
+            qty_s = "%s shares" % _str_num(order.get("qty"))
+        plan = order.get("plan") or {}
+        entry = _f(order.get("limit_price")) if typ == "limit" else _f(plan.get("entry"))
+        entry_s = ("at %s" % _money(entry, p)) if entry else "at market"
+        bits = ["%s %s %s %s" % (side, qty_s, sym, entry_s)]
+        stop = _f(order.get("stop_loss_stop_price")) or _f(plan.get("stop"))
+        target = _f(order.get("take_profit_limit_price")) or _f(plan.get("target"))
+        if stop:
+            bits.append("stop %s" % _money(stop, p))
+        if target:
+            bits.append("target %s" % _money(target, p))
+        loss, _ = max_loss(order, p=p, cfg=cfg)
+        if loss is not None:
+            bits.append("max loss incl. fees %s" % _money(loss, p))
+        return ["%s. Enter it in your broker app yourself." % ", ".join(bits)]
     if is_bracket(order):
         how = "limit %s" % _p(order["limit_price"]) if typ == "limit" and order.get("limit_price") else typ
         parts = ["%s %s %s, %s, %s" % (side, _str_num(order.get("qty")), sym, how, tif)]
@@ -241,13 +285,13 @@ def plain_parts(order, p=None):
     return ["%s %s, %s, %s" % (side, what, how, tif)]
 
 
-def plain(order, p=None):
+def plain(order, p=None, cfg=None):
     """BUY $1,250 of AAPL, market order, good for today
     BUY 8 TSLA, market, good for today / stop-loss 358.32 / take-profit 370.04 / max loss about $46.88 ..."""
-    return " / ".join(plain_parts(order, p=p))
+    return " / ".join(plain_parts(order, p=p, cfg=cfg))
 
 
-def amount_numbers(order):
+def amount_numbers(order, p=None, cfg=None):
     nums = []
     for k in ("notional", "qty", "limit_price", "stop_loss_stop_price", "take_profit_limit_price",
               "stop_loss_limit_price"):
@@ -255,13 +299,25 @@ def amount_numbers(order):
             v = _f(order[k])
             if v is not None:
                 nums.append(v)
-    loss, _ = max_loss(order)
+    if _is_manual(cfg=cfg, p=p, order=order):
+        plan = order.get("plan") or {}
+        for k in ("entry", "stop", "target"):
+            v = _f(plan.get(k))
+            if v is not None:
+                nums.append(v)
+        lot = int((p or {}).get("lot", 100))
+        q = _f(order.get("qty"))
+        if q is not None and lot > 1:
+            nums.append(q / lot)
+    loss, _ = max_loss(order, p=p, cfg=cfg)
     if loss is not None:
         nums.append(loss)
+        if _is_manual(cfg=cfg, p=p, order=order):
+            nums.append(float(round(loss)))
     return nums
 
 
-def parse_yes(reply, order, batch_symbols=()):
+def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None):
     """Is this reply an explicit yes for THIS one order? Returns (ok, why)."""
     raw = (reply or "").strip()
     if not raw:
@@ -281,13 +337,18 @@ def parse_yes(reply, order, batch_symbols=()):
     named = tokens & others
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
-    nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", raw)]
+    if _is_manual(cfg=cfg, p=p, order=order):
+        nums = [float(n.replace(".", "").replace(",", "")) if re.match(r"^\d{1,3}(?:\.\d{3})+$", n)
+                else float(n.replace(",", ""))
+                for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
+    else:
+        nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
-        want = amount_numbers(order)
+        want = amount_numbers(order, p=p, cfg=cfg)
         if not any(abs(n - w) < 0.005 for n in nums for w in want):
             return False, "the reply says %s, but this order is %s" % (
-                ", ".join(_str_num(n) for n in nums), plain(order))
-    return True, "explicit yes for %s" % plain(order)
+                ", ".join(_str_num(n) for n in nums), plain(order, p=p, cfg=cfg))
+    return True, "explicit yes for %s" % plain(order, p=p, cfg=cfg)
 
 
 # ---------------------------------------------------------------- state
@@ -316,7 +377,7 @@ def risk_verdict(risk, fp, today):
     return None, "this exact order was not in the last risk check (it changed or is new); run check.py again"
 
 
-def status_of(order, risk, state, today):
+def status_of(order, risk, state, today, manual=False):
     """(ready, label, risk_result)"""
     fp = fingerprint(order)
     rv, why = risk_verdict(risk, fp, today)
@@ -328,6 +389,8 @@ def status_of(order, risk, state, today):
     if rec:
         st = rec.get("status")
         if st == "approved":
+            if manual:
+                return False, "APPROVED by you at %s, waiting for manual entry and result" % rec.get("at"), rv
             return False, "APPROVED by you at %s, waiting for the place_stock_order call" % rec.get("at"), rv
         return False, "DONE: %s at %s" % (st, rec.get("at")), rv
     return True, "READY: trader-risk PASS, waiting for your yes", rv
@@ -344,19 +407,28 @@ def kind_of(order, rv):
 
 def render(order, idx, total, cfg, risk, state, today):
     p = market.from_config(cfg)
-    ready, label, rv = status_of(order, risk, state, today)
+    manual = _is_manual(cfg, p, order)
+    ready, label, rv = status_of(order, risk, state, today, manual=manual)
     broker = str(cfg.get("broker", "alpaca")).lower()
     paper = cfg.get("paper", True)
     acct = "PAPER account" if paper else "LIVE ACCOUNT, REAL MONEY"
-    lines = ["ORDER %d of %d, %s, %s" % (idx, total, acct, "Interactive Brokers" if broker == "ibkr" else "Alpaca")]
-    for part in plain_parts(order, p=p):
+    if manual:
+        where = "manual (IDX)"
+    elif broker == "ibkr":
+        where = "Interactive Brokers"
+    else:
+        where = "Alpaca"
+    lines = ["ORDER %d of %d, %s, %s" % (idx, total, acct, where)]
+    for part in plain_parts(order, p=p, cfg=cfg):
         lines.append("  " + part)
     if order.get("why"):
         lines.append("  why: " + order["why"])
     lines.append("  " + label)
     for w in (rv or {}).get("warnings", []):
         lines.append("  note: " + w)
-    if broker == "ibkr":
+    if manual:
+        lines.append("  IDX orders are manual: no broker API or MCP tool is called.")
+    elif broker == "ibkr":
         lines.append("  The agent drafts this with the Interactive Brokers connector. IBKR sends it to your")
         lines.append("  IBKR account, and it only goes to the market after you approve it there.")
     else:
@@ -367,16 +439,25 @@ def render(order, idx, total, cfg, risk, state, today):
             lines.append("  Alpaca places the entry, then the stop-loss and the take-profit as two orders")
             lines.append("  that cancel each other: when one fills, the other is canceled.")
     if ready:
-        lines.append("  Reply \"yes\" to place this one order, or \"no\" to skip it.")
-        if broker != "ibkr":
-            lines.append("  Antigravity's permission prompt asks again: approve places it, deny stops it.")
+        if manual:
+            lines.append("  Reply \"yes\" to confirm this one order, or \"no\" to skip it.")
+        else:
+            lines.append("  Reply \"yes\" to place this one order, or \"no\" to skip it.")
+            if broker != "ibkr":
+                lines.append("  Antigravity's permission prompt asks again: approve places it, deny stops it.")
     return "\n".join(lines), ready
 
 
 def ticket_json(order, idx, cfg, risk, state, today):
     p = market.from_config(cfg)
-    ready, label, rv = status_of(order, risk, state, today)
-    loss, stop = max_loss(order)
+    manual = _is_manual(cfg, p, order)
+    ready, label, rv = status_of(order, risk, state, today, manual=manual)
+    loss, stop = max_loss(order, p=p, cfg=cfg)
+    if manual:
+        return {"index": idx, "ready": ready, "status": label, "plain": plain(order, p=p, cfg=cfg),
+                "fingerprint": fingerprint(order), "paper": bool(cfg.get("paper", True)),
+                "broker": "manual", "manual": True, "market": p.get("id", "idx"),
+                "why": order.get("why", ""), "max_loss": loss, "stop": stop}
     return {"index": idx, "ready": ready, "status": label, "plain": plain(order, p=p),
             "fingerprint": fingerprint(order), "paper": bool(cfg.get("paper", True)),
             "broker": cfg.get("broker", "alpaca"), "tool": "place_stock_order",
@@ -437,10 +518,11 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date):
 def log_fill(state_path, now, today, symbol, side, qty, price, p=None):
     """A fill in the log, so trader-risk can count day trades (a buy and a sell the same day)."""
     state = load_state(state_path)
+    px_s = _p(price) if (p or _US).get("id") == "us" else _money(price, p)
     state.setdefault("orders", []).append({
         "at": ny_iso(now, p=p), "date": today, "status": "filled", "symbol": symbol.upper(), "side": side,
         "qty": _str_num(float(qty)), "price": float(price),
-        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), symbol.upper(), _p(price))})
+        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), symbol.upper(), px_s)})
     write_json(state_path, state)
 
 
@@ -497,24 +579,29 @@ def cmd_show(a):
 def cmd_approve(a):
     orders, cfg, risk, state, today, now = _load(a)
     order = _pick(orders, a.index)
-    ready, label, rv = status_of(order, risk, state, today)
+    p = market.from_config(cfg)
+    manual = _is_manual(cfg, p, order)
+    ready, label, rv = status_of(order, risk, state, today, manual=manual)
     if not ready:
         raise TicketError("order %d is not ready: %s" % (a.index, label))
-    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders])
+    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders], p=p, cfg=cfg)
     if not ok:
         print("Not recorded: %s. Ask the user again with the ticket for order %d." % (why, a.index))
         return 1
-    p = market.from_config(cfg)
-    loss, stop = max_loss(order)
+    loss, stop = max_loss(order, p=p, cfg=cfg)
+    broker_name = "manual" if manual else cfg.get("broker", "alpaca")
     rec = {"at": ny_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fingerprint(order),
            "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
            "qty": order.get("qty"), "kind": kind_of(order, rv), "max_loss": loss, "stop": stop,
-           "plain": plain(order, p=p), "status": "approved", "reply": a.reply,
-           "paper": bool(cfg.get("paper", True)), "broker": cfg.get("broker", "alpaca")}
+           "plain": plain(order, p=p, cfg=cfg), "status": "approved", "reply": a.reply,
+           "paper": bool(cfg.get("paper", True)), "broker": broker_name}
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
-    print("Recorded your yes for order %d: %s." % (a.index, plain(order, p=p)))
-    if str(cfg.get("broker", "alpaca")).lower() == "ibkr":
+    print("Recorded your yes for order %d: %s." % (a.index, plain(order, p=p, cfg=cfg)))
+    if manual:
+        print("Enter this order in your broker app yourself, then record the outcome: "
+              "ticket.py result --index %d --status placed|denied|failed" % a.index)
+    elif str(cfg.get("broker", "alpaca")).lower() == "ibkr":
         print("Now draft it with the Interactive Brokers connector; approve it in your IBKR account.")
     else:
         print("Now call place_stock_order with exactly:")
@@ -603,11 +690,16 @@ def cmd_flatten(a):
             raise TicketError("nothing to flatten: no %s shares in %s. Check the broker (get_open_position "
                               "%s) and pass --qty if you do hold some" % (sym, a.portfolio, sym))
     plan = read_json(a.plan, "plan", required=False) or {}
+    manual = _is_manual(cfg, p)
+    tz = "New York" if p.get("id") == "us" else (p.get("tz_label") or p.get("timezone") or "local")
+    default_flat = (p.get("defaults") or {}).get("flat_by") or "15:55"
     flat_by = (plan.get("flat_by") if str(plan.get("symbol", "")).upper() == sym else None) \
-        or cfg.get("flat_by") or "15:55"
+        or cfg.get("flat_by") or default_flat
     order = {"symbol": sym, "side": "sell", "qty": _str_num(qty), "type": "market", "time_in_force": "day",
-             "why": "flat by %s New York: closes the %s day trade before the close (qty from %s)"
-             % (flat_by, sym, source)}
+             "why": "flat by %s %s: closes the %s day trade before the close (qty from %s)"
+             % (flat_by, tz, sym, source)}
+    if manual:
+        order["market"] = p["id"]
     old = read_json(a.orders, "orders", required=False)
     replaced = len(old.get("orders", [])) if isinstance(old, dict) else 0
     doc = {"created_by": "trader-broker", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "status": "proposed",
@@ -615,23 +707,27 @@ def cmd_flatten(a):
            "note": "Flatten ticket. Nothing is placed until trader-risk passes it and you say yes in the chat.",
            "source": "ticket.py flatten %s on %s" % (sym, today), "orders": [order]}
     write_json(a.orders, doc)
-    print("Flatten %s: %s (flat by %s New York)." % (sym, plain(order), flat_by))
+    print("Flatten %s: %s (flat by %s %s)." % (sym, plain(order, p=p, cfg=cfg), flat_by, tz))
     print("Wrote it to %s%s." % (a.orders, (" (it replaced %d earlier proposal%s)"
                                              % (replaced, "" if replaced == 1 else "s")) if replaced else ""))
-    if a.qty is None:
+    if not manual and a.qty is None:
         print("The qty comes from %s. Check it against get_open_position %s before you say yes." % (source, sym))
     print("Next:")
     print("  1. trader-risk: check.py. A sell that only closes what you hold is never blocked by the daily")
     print("     limits or the entry window.")
     print("  2. ticket.py show, then the user's yes for this one order.")
-    print("  3. If the bracket's stop-loss and take-profit are still open, Alpaca holds these shares for them")
-    print("     and rejects a new sell. Cancel them first: get_orders (status open, nested true), then")
-    print("     cancel_order_by_id for each open leg (Needs approval). Then place_stock_order with the ticket.")
+    if manual:
+        print("  3. Enter the sell in your broker app yourself, then record the fill with ticket.py result/fill.")
+    else:
+        print("  3. If the bracket's stop-loss and take-profit are still open, Alpaca holds these shares for them")
+        print("     and rejects a new sell. Cancel them first: get_orders (status open, nested true), then")
+        print("     cancel_order_by_id for each open leg (Needs approval). Then place_stock_order with the ticket.")
     return 0
 
 
 def cmd_log(a):
-    p = market.from_config()
+    cfg = read_json(a.config, "config", required=False) or {}
+    p = market.from_config(cfg)
     state = load_state(a.state)
     now, today = _clock(a, p=p)
     rows = [r for r in state.get("orders", []) if a.all or rec_day(r) == today]
@@ -705,6 +801,7 @@ def main(argv=None):
     clock(p)
     p = sub.add_parser("log", help="today's decisions")
     p.add_argument("--state", default="trader/state/broker.json")
+    p.add_argument("--config", default="trader/config.json")
     clock(p)
     p.add_argument("--all", action="store_true")
     a = ap.parse_args(argv)
