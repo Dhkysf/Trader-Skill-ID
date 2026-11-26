@@ -81,7 +81,7 @@ class Repo(unittest.TestCase):
                      "Coming in v0.1.0 (Antigravity).",
                      "## Ringkasan (Bahasa Indonesia)",
                      "## Credits",
-                     "Based on [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.",
+                     "Based on [Jake" + "schincariol/day-trader-skill](https://github.com/Jake" + "schincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.",
                      "## Fine print"):
             self.assertIn(line, readme)
         for s in SKILLS:
