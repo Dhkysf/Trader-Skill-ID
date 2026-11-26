@@ -9,8 +9,6 @@ from _load import ROOT
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
           "trader-pelosi"]
-ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track breaking news, time every "
-         "entry and exit, and replay every outcome before you risk a dollar.")
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
               "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
@@ -44,7 +42,7 @@ class Repo(unittest.TestCase):
 
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in IGNORED_ROOT)
-        self.assertEqual(root, sorted([".claude-plugin", "AGENTS.md", "LICENSE", "README.md",
+        self.assertEqual(root, sorted([".antigravity-plugin", "AGENTS.md", "LICENSE", "README.md",
                                        "check.bat", "skills", "tests"]))
 
     def test_frontmatter_name_and_description(self):
@@ -62,16 +60,18 @@ class Repo(unittest.TestCase):
             self.assertIn("not financial advice", low, s)
             self.assertIn("yes", low, s)
 
-    def test_plugin_manifest_points_at_the_root_skills(self):
-        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json")) as fh:
+    def test_antigravity_plugin_manifest(self):
+        with open(os.path.join(ROOT, ".antigravity-plugin", "plugin.json"), encoding="utf-8") as fh:
             plugin = json.load(fh)
-        self.assertEqual(plugin["name"], "day-trader-skill")
-        self.assertEqual(plugin["skills"], "./")
-        self.assertEqual(plugin["description"], ABOUT)
-        with open(os.path.join(ROOT, ".claude-plugin", "marketplace.json")) as fh:
-            market = json.load(fh)
-        self.assertEqual(market["name"], "day-trader-skill")
-        self.assertEqual(market["plugins"][0]["name"], "day-trader-skill")
+        self.assertEqual(plugin["$schema"], "https://antigravity.google/schemas/v1/plugin.json")
+        self.assertEqual(plugin["name"], "trader-skill-id")
+        self.assertEqual(plugin["displayName"], "Trader Skill ID")
+        self.assertEqual(plugin["version"], "0.1.0")
+        self.assertIsInstance(plugin["description"], str)
+        self.assertGreater(len(plugin["description"]), 20)
+        self.assertEqual(plugin["author"]["name"], "Dhkysf")
+        self.assertEqual(plugin["homepage"], "https://github.com/Dhkysf/Trader-Skill-ID")
+        self.assertEqual(len(plugin["suggestedPrompts"]), 3)
 
     def test_readme_carries_the_reel_copy(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:

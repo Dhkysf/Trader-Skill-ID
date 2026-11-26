@@ -1,0 +1,17 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "trader-skill-id",
+  "displayName": "Trader Skill ID",
+  "version": "0.1.0",
+  "description": "11 agent skills for day-trading analysis: scan charts, track breaking news, time entries and exits, replay 10,000 sessions, size positions, and check risk before any order.",
+  "author": {
+    "name": "Dhkysf",
+    "url": "https://github.com/Dhkysf"
+  },
+  "homepage": "https://github.com/Dhkysf/Trader-Skill-ID",
+  "suggestedPrompts": [
+    "Scan TSLA, NVDA and AMD for setups",
+    "Show today's news for my watchlist",
+    "Plan the exit for my TSLA idea"
+  ]
+}
