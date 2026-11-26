@@ -58,6 +58,8 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-analyst` | Earnings Analyst | Reads earnings reports and sums up what changed. |
 | `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures the minute they are filed. |
 
+Shared module: `/trader-core` - shared market rules used by the other skills.
+
 ## How to use it
 
 Everything lands in a `trader/` folder in your project, and each skill reads
@@ -188,6 +190,7 @@ wash sales likely. Nothing here is tax advice.
 ```
 .antigravity-plugin/plugin.json
 skills/
+  trader-core/        SKILL.md, market.py, markets/us.json
   trader-scanner/     SKILL.md, scan.py
   trader-news/        SKILL.md, news.py
   trader-entry/       SKILL.md, entry.py

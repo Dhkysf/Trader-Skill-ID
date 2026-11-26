@@ -5,8 +5,8 @@ import unittest
 
 from _load import ROOT
 
-# v2, the day-trading pack: the eleven folders the reel's repo card shows
-SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
+# v2, the day-trading pack: the eleven folders the reel's repo card shows, plus shared trader-core
+SKILLS = ["trader-core", "trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
           "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-analyst",
           "trader-pelosi"]
 # skills on the way to an order carry the safety block
