@@ -1,0 +1,7 @@
+trader/
+data/
+.codegraph/
+AUDIT.md
+__pycache__/
+*.pyc
+.venv/
