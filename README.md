@@ -1,6 +1,6 @@
-# The Day Trader skill
+# Trader Skill ID
 
-11 Claude skills for day trading: scan thousands of charts, track breaking news, time every entry and exit, and replay every outcome before you risk a dollar.
+Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.
 
 Free, MIT, no signup, no API key. The tools are plain Python that read free
 public data: Yahoo Finance charts, Nasdaq Trader's symbol lists, SEC EDGAR
@@ -16,41 +16,9 @@ past day the same setup fired, and tells you the honest odds.
 And no trade goes through until you say yes. Nothing in this pack can place
 an order on its own. Paper trading is the default.
 
-> **Looking for the original Trader skill?** Copy an investor's 13F, the
-> stock screener, tax lots and rebalancing live in
-> [github.com/Jakeschincariol/trader-skill](https://github.com/Jakeschincariol/trader-skill).
-> This repo is its day-trading sequel: the Trader skill v2.
-
 ## Install
 
-Paste this into Claude:
-
-```
-https://github.com/Jakeschincariol/day-trader-skill
-
-install skill
-```
-
-Or as a plugin, in Claude Code:
-
-```
-/plugin marketplace add Jakeschincariol/day-trader-skill
-/plugin install day-trader-skill@day-trader-skill
-```
-
-Claude Code namespaces plugin skills, so installed as a plugin they show up as
-`/day-trader-skill:trader-scanner` and so on. Copy the folders instead if you want
-plain `/trader-scanner`:
-
-```bash
-git clone https://github.com/Jakeschincariol/day-trader-skill.git
-cp -r day-trader-skill/trader-* ~/.claude/skills/
-```
-
-Project-local instead of global: copy the same folders into your repo's
-`.claude/skills/`. No Claude Code at all? Paste any single `SKILL.md` at the
-top of a chat and it runs as a mode. You lose the Python tools, but the method
-works.
+Coming in v0.1.0 (Antigravity).
 
 The tools need Python 3.8 or newer. Nothing to pip install. The SEC tools
 (news filings, the analyst) ask you to identify yourself: put your name and
@@ -213,4 +181,12 @@ trader-pelosi/      SKILL.md, ptr.py
 tests/              unittest suite + offline fixtures
 ```
 
-MIT. Made by [Jake Schincariol](https://opusjake.ai).
+## Credits
+
+Based on [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.
+
+## Ringkasan (Bahasa Indonesia)
+
+Trader Skill ID adalah paket skill agen untuk analisis day-trading di Google Antigravity: saham AS saat ini, saham Indonesia (IDX) dan forex berikutnya. Ini bukan nasihat keuangan; semua keputusan transaksi tetap di tangan Anda dan tidak ada order yang dikirim tanpa persetujuan eksplisit. Data pasar yang digunakan bersifat gratis, tidak resmi, dan dapat tertunda.
+
+MIT.
