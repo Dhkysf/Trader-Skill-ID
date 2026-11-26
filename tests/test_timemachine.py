@@ -507,7 +507,10 @@ class Network(unittest.TestCase):
             p = os.path.join(d, "plan.json")
             with open(p, "w") as fh:
                 json.dump(PLAN, fh)
-            code, text, _ = run(["run", "--plan", p, "--now", NOW, "--replays", "300"])
+            c = os.path.join(d, "config.json")
+            with open(c, "w") as fh:
+                json.dump({"market": "us"}, fh)
+            code, text, _ = run(["run", "--plan", p, "--config", c, "--now", NOW, "--replays", "300"])
             self.assertEqual(code, 0)
             self.assertEqual(self.calls, ["query2"])
         finally:
@@ -521,13 +524,16 @@ class Cli(unittest.TestCase):
         os.makedirs(os.path.dirname(self.plan))
         with open(self.plan, "w") as fh:
             json.dump(PLAN, fh, indent=2)
+        self.cfg = os.path.join(self.d, "trader", "config.json")
+        with open(self.cfg, "w") as fh:
+            json.dump({"market": "us"}, fh)
         self.out = os.path.join(self.d, "trader", "timemachine.json")
 
     def tearDown(self):
         shutil.rmtree(self.d)
 
     def test_run_with_the_plan_end_to_end(self):
-        code, text, err = run(["run", "--plan", self.plan, "--offline", TSLA, "--now", NOW, "--write", self.out])
+        code, text, err = run(["run", "--plan", self.plan, "--config", self.cfg, "--offline", TSLA, "--now", NOW, "--write", self.out])
         self.assertEqual(code, 0, err)
         self.assertIn("target first   29.4 %", text)
         self.assertIn("Close to a coin flip: target first 29.4 % vs stop first 25.5 %.", text)
@@ -544,7 +550,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(doc["plan"]["from"], self.plan)
 
     def test_json_output(self):
-        code, text, _ = run(["run", "--plan", self.plan, "--offline", TSLA, "--now", NOW, "--json"])
+        code, text, _ = run(["run", "--plan", self.plan, "--config", self.cfg, "--offline", TSLA, "--now", NOW, "--json"])
         self.assertEqual(code, 0)
         doc = json.loads(text)
         self.assertEqual(doc["mc"]["p_stop"], 0.2548)
@@ -555,7 +561,7 @@ class Cli(unittest.TestCase):
     def test_the_plan_as_flags_matches_the_file(self):
         code, text, err = run(["run", "--symbol", "tsla", "--date", "2026-10-19", "--entry", "364.18",
                                "--stop", "358.32", "--target", "370.04", "--entry-time", "10:15 AM",
-                               "--offline", TSLA, "--now", NOW, "--json"])
+                               "--config", self.cfg, "--offline", TSLA, "--now", NOW, "--json"])
         self.assertEqual(code, 0, err)
         doc = json.loads(text)
         self.assertEqual((doc["mc"]["p_target"], doc["mc"]["p_green"]), (0.2938, 0.5168))
@@ -594,7 +600,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(run([])[0], 1)
 
     def test_chart(self):
-        run(["run", "--plan", self.plan, "--offline", TSLA, "--now", NOW, "--write", self.out])
+        run(["run", "--plan", self.plan, "--config", self.cfg, "--offline", TSLA, "--now", NOW, "--write", self.out])
         code, text, _ = run(["chart", "--from", self.out])
         self.assertEqual(code, 0)
         lines = text.splitlines()
@@ -606,7 +612,7 @@ class Cli(unittest.TestCase):
         self.assertIn("4:00", text)
         self.assertEqual(lines[-2:], ["Close to a coin flip: target first 29.4 % vs stop first 25.5 %.",
                                       "45.1 % of the replays hit neither by 4:00 PM; the price at 4:00 PM decides those."])
-        code, again, _ = run(["chart", "--plan", self.plan, "--offline", TSLA, "--now", NOW])
+        code, again, _ = run(["chart", "--plan", self.plan, "--config", self.cfg, "--offline", TSLA, "--now", NOW])
         self.assertEqual(again, text)
 
 

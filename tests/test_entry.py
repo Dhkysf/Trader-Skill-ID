@@ -45,7 +45,9 @@ def chart(d=None, sym="TSLA"):
 
 
 def at(text, d=None, **kw):
-    return entry.evaluate(chart(d), ny(text), **kw)
+    cfg = dict(kw.pop("cfg", None) or {})
+    cfg.setdefault("market", "us")
+    return entry.evaluate(chart(d), ny(text), cfg=cfg, **kw)
 
 
 def shift_to(d, day, edt):
@@ -119,7 +121,7 @@ class TheReel(unittest.TestCase):
     def test_the_live_tick_and_the_in_progress_bar_are_dropped(self):
         c = chart()
         self.assertEqual(c["bars"][-1]["t"], 1792421385)          # 10:49:45 is in the file
-        r = entry.evaluate(c, entry.utc_of(c["data_time"]))     # read as of the file's own time
+        r = entry.evaluate(c, entry.utc_of(c["data_time"]), cfg={"market": "us"})     # read as of the file's own time
         self.assertEqual(r["now"], "2026-10-19 10:49:45")
         self.assertEqual(r["_bars"][-1]["slot"], 14)               # the 10:40 bar
         self.assertEqual(r["forming"]["bar_start"], "10:45")
@@ -224,20 +226,20 @@ class OneMinute(unittest.TestCase):
 
     def test_wick_and_close_at_the_high_do_not_trigger(self):
         c = self.c()
-        r = entry.evaluate(c, entry.utc_of(c["data_time"]), interval="1m")
+        r = entry.evaluate(c, entry.utc_of(c["data_time"]), interval="1m", cfg={"market": "us"})
         self.assertEqual(r["now"], "2026-10-19 10:06:30")
         self.assertEqual(r["opening_range"], {"high": 100.5, "low": 99.0, "minutes": 15, "bars": 15, "of": 15,
                                               "complete": True, "avg_volume": 10667})
         t = r["trigger"]
         self.assertEqual((t["time"], t["bar_start"], t["bar_index"], t["price"]), ("9:59 AM", "09:58", 28, 100.62))
-        r = entry.evaluate(c, ny("2026-10-19 09:58:59"), interval="1m")
+        r = entry.evaluate(c, ny("2026-10-19 09:58:59"), interval="1m", cfg={"market": "us"})
         self.assertEqual(r["status"], "waiting")
         self.assertEqual(r["forming"]["bar_start"], "09:58")
         self.assertEqual(r["last"]["close"], 100.5)             # the 9:57 bar closed AT the high
 
     def test_null_bar_tick_and_volume(self):
         c = self.c()
-        r = entry.evaluate(c, entry.utc_of(c["data_time"]), interval="1m", min_volume_x=2)
+        r = entry.evaluate(c, entry.utc_of(c["data_time"]), interval="1m", min_volume_x=2, cfg={"market": "us"})
         self.assertEqual((r["trigger"]["time"], r["trigger"]["bar_index"]), ("10:02 AM", 31))
         slots = [b["slot"] for b in r["_bars"]]
         self.assertNotIn(19, slots)                               # 9:49 came as nulls
@@ -245,7 +247,11 @@ class OneMinute(unittest.TestCase):
         self.assertEqual(r["forming"]["bar_start"], "10:06")
 
     def test_the_file_and_the_interval_must_agree(self):
-        code, _, err = run(["check", "DEMO", "--offline", DEMO])
+        with tempfile.TemporaryDirectory() as d:
+            c = os.path.join(d, "config.json")
+            with open(c, "w") as fh:
+                json.dump({"market": "us"}, fh)
+            code, _, err = run(["check", "DEMO", "--config", c, "--offline", DEMO])
         self.assertEqual(code, 1)
         self.assertIn("1m bars, not 5m", err)
 
@@ -255,27 +261,27 @@ class Calendar(unittest.TestCase):
         for day, edt in ((datetime.date(2026, 12, 7), False), (datetime.date(2026, 11, 2), False),
                          (datetime.date(2026, 10, 30), True), (datetime.date(2026, 3, 9), True)):
             d = shift_to(doc(), day, edt)
-            r = entry.evaluate(chart(d), ny("%s 10:15" % day))
+            r = entry.evaluate(chart(d), ny("%s 10:15" % day), cfg={"market": "us"})
             self.assertEqual(r["status"], "triggered", day)
             self.assertEqual(r["trigger"]["time"], "10:15 AM", day)
             self.assertEqual(r["trigger"]["bar_index"], 8, day)
-            self.assertEqual(entry.evaluate(chart(d), ny("%s 10:12" % day))["status"], "waiting", day)
+            self.assertEqual(entry.evaluate(chart(d), ny("%s 10:12" % day), cfg={"market": "us"})["status"], "waiting", day)
         # Dec 7 at 10:15 New York is 15:15 UTC
         self.assertEqual(ny("2026-12-07 10:15"), DT(2026, 12, 7, 15, 15))
 
     def test_half_day_moves_the_cutoff_up(self):
         d = shift_to(no_breakout(), datetime.date(2026, 11, 27), False)
-        r = entry.evaluate(chart(d), ny("2026-11-27 12:29"))
+        r = entry.evaluate(chart(d), ny("2026-11-27 12:29"), cfg={"market": "us"})
         self.assertEqual(r["status"], "waiting")
         self.assertEqual((r["closes"], r["no_entries_after"]), ("13:00", "12:30"))
-        r = entry.evaluate(chart(d), ny("2026-11-27 12:30"))
+        r = entry.evaluate(chart(d), ny("2026-11-27 12:30"), cfg={"market": "us"})
         self.assertEqual(r["status"], "expired")
         self.assertIn("early close", r["reason"])
-        r = entry.evaluate(chart(shift_to(doc(), datetime.date(2026, 11, 27), False)), ny("2026-11-27 10:15"))
+        r = entry.evaluate(chart(shift_to(doc(), datetime.date(2026, 11, 27), False)), ny("2026-11-27 10:15"), cfg={"market": "us"})
         self.assertEqual(r["trigger"]["time"], "10:15 AM")
         self.assertIn("Early close today", "\n".join(entry.describe(r)))
         # a cutoff already before the early close stays put
-        cfg = {"no_entries_before": "09:45", "no_entries_after": "12:00"}
+        cfg = {"market": "us", "no_entries_before": "09:45", "no_entries_after": "12:00"}
         self.assertEqual(entry.evaluate(chart(d), ny("2026-11-27 11:00"), cfg=cfg)["no_entries_after"], "12:00")
 
     def test_weekend_holiday_and_empty_data(self):
@@ -399,7 +405,7 @@ def live_provider(d, lag_until=None, calls=None):
 
 
 class Watch(unittest.TestCase):
-    OPTS = {"setup": "orb", "or_minutes": 15, "interval": "5m", "level": None, "min_volume_x": None, "cfg": None}
+    OPTS = {"setup": "orb", "or_minutes": 15, "interval": "5m", "level": None, "min_volume_x": None, "cfg": {"market": "us"}}
 
     def loop(self, provider, start, **kw):
         clock = entry.SimClock(ny(start))
@@ -490,6 +496,9 @@ class Cli(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.cwd = os.getcwd()
         os.chdir(self.d)
+        os.makedirs("trader", exist_ok=True)
+        with open(os.path.join("trader", "config.json"), "w") as fh:
+            json.dump({"market": "us"}, fh)
 
     def tearDown(self):
         os.chdir(self.cwd)
@@ -540,9 +549,9 @@ class Cli(unittest.TestCase):
         self.assertIn("needs --level", err)
 
     def test_config_is_read(self):
-        os.mkdir("trader")
+        os.makedirs("trader", exist_ok=True)
         with open(os.path.join("trader", "config.json"), "w") as fh:
-            json.dump({"no_entries_after": "10:10"}, fh)
+            json.dump({"market": "us", "no_entries_after": "10:10"}, fh)
         code, text, _ = run(["check", "TSLA", "--offline", TSLA, "--now", "2026-10-19 10:15"])
         self.assertEqual(code, 1)
         self.assertIn("EXPIRED", text)
@@ -566,7 +575,7 @@ class Cli(unittest.TestCase):
         os.mkdir("charts")
         shutil.copy(TSLA, os.path.join("charts", "TSLA.json"))
         shutil.copy(DEMO, os.path.join("charts", "DEMO.json"))
-        os.mkdir("trader")
+        os.makedirs("trader", exist_ok=True)
         with open(os.path.join("trader", "watchlist.json"), "w") as fh:
             json.dump({"created_by": "trader-scanner", "hits": [
                 {"symbol": "TSLA", "setups": ["orb"], "or_high": 362.18, "or_low": 354.47},

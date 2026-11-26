@@ -219,16 +219,16 @@ _CURRENCY_PREFIX = {"USD": "$"}
 
 
 def from_config(cfg_or_path=None):
-    """Load the market profile named in a config dict or JSON file (default: 'us')."""
+    """Load the market profile named in a config dict or JSON file (default: 'idx')."""
     if isinstance(cfg_or_path, dict):
-        return load(cfg_or_path.get("market") or "us")
+        return load(cfg_or_path.get("market") or "idx")
     path = cfg_or_path or "trader/config.json"
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             doc = json.load(fh)
         if isinstance(doc, dict):
-            return load(doc.get("market") or "us")
-    return load("us")
+            return load(doc.get("market") or "idx")
+    return load("idx")
 
 
 def money(p, amount):

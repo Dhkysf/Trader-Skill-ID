@@ -329,17 +329,20 @@ class Cli(unittest.TestCase):
         self.rules = os.path.join(self.d, "alerts.json")
         self.state = os.path.join(self.d, "state", "alerts.json")
         self.prices = os.path.join(self.d, "prices.json")
+        self.cfg = os.path.join(self.d, "config.json")
+        with open(self.cfg, "w") as fh:
+            json.dump({"market": "us"}, fh)
 
     def tearDown(self):
         shutil.rmtree(self.d)
 
     def check(self, now):
         return run(["check", "--rules", self.rules, "--state", self.state, "--prices-out", self.prices,
-                    "--offline", QDIR, "--now", now])
+                    "--config", self.cfg, "--offline", QDIR, "--now", now])
 
     def test_the_reel_trade_from_the_plan(self):
         code, text, _ = run(["add", "--from-plan", "--plan", PLAN, "--rules", self.rules, "--state", self.state,
-                             "--config", os.path.join(self.d, "none")])
+                             "--config", self.cfg])
         self.assertEqual(code, 0)
         self.assertIn("Added tsla-flat-by", text)
         self.assertEqual(run(["add", "--rules", self.rules, "--opening-bell"])[0], 0)
@@ -366,7 +369,7 @@ class Cli(unittest.TestCase):
         self.assertIn("Nothing hit. 1 rule(s) watched today.", text)
 
         # a new plan replaces the plan rules and re-arms them
-        code, text, _ = run(["add", "--from-plan", "--plan", PLAN, "--rules", self.rules, "--state", self.state])
+        code, text, _ = run(["add", "--from-plan", "--plan", PLAN, "--rules", self.rules, "--state", self.state, "--config", self.cfg])
         with open(self.rules) as fh:
             ids = [r["id"] for r in json.load(fh)["rules"]]
         self.assertEqual(sorted(ids), ["opening-bell", "tsla-flat-by", "tsla-plan-stop", "tsla-plan-target"])
@@ -418,12 +421,12 @@ class Cli(unittest.TestCase):
         self.assertIn("no plan", err)
 
     def test_quote_write_merges(self):
-        code, text, _ = run(["quote", "AAPL", "KO", "--offline", QDIR, "--write", self.prices,
+        code, text, _ = run(["quote", "AAPL", "KO", "--config", self.cfg, "--offline", QDIR, "--write", self.prices,
                              "--now", "2026-10-13T20:00:01Z"])
         self.assertEqual(code, 0)
         self.assertIn("AAPL   $341.27", text)
         self.assertIn("delayed", text)
-        run(["quote", "BAC", "--offline", QDIR, "--write", self.prices])
+        run(["quote", "BAC", "--config", self.cfg, "--offline", QDIR, "--write", self.prices])
         with open(self.prices) as fh:
             doc = json.load(fh)
         self.assertEqual(sorted(doc["prices"]), ["AAPL", "BAC", "KO"])
@@ -434,13 +437,13 @@ class Cli(unittest.TestCase):
         pf = os.path.join(self.d, "portfolio.json")
         with open(pf, "w") as fh:
             json.dump({"cash": 0, "positions": [{"ticker": "KO", "shares": 1}]}, fh)
-        code, text, _ = run(["quote", "--holdings", "--portfolio", pf, "--plan", PLAN, "--offline", QDIR, "--json"])
+        code, text, _ = run(["quote", "--holdings", "--config", self.cfg, "--portfolio", pf, "--plan", PLAN, "--offline", QDIR, "--json"])
         self.assertEqual(code, 0)
         self.assertEqual(sorted(json.loads(text)["quotes"]), ["KO", "TSLA"])
 
     def test_clock_exit_codes(self):
-        self.assertEqual(run(["clock", "--now", "2026-10-19 10:15"])[0], 0)
-        code, text, _ = run(["clock", "--now", "2026-12-25T10:00"])
+        self.assertEqual(run(["clock", "--config", self.cfg, "--now", "2026-10-19 10:15"])[0], 0)
+        code, text, _ = run(["clock", "--config", self.cfg, "--now", "2026-12-25T10:00"])
         self.assertEqual(code, 1)
         self.assertIn("Christmas Day", text)
 

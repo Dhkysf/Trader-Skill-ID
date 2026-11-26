@@ -86,7 +86,11 @@ class Check(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = os.path.join(self.tmp.name, "state", "news.json")
+        self.cfg = os.path.join(self.tmp.name, "config.json")
+        with open(self.cfg, "w") as fh:
+            json.dump({"market": "us"}, fh)
         self.base = ["--offline", DIR, "--state", self.state, "--now", NOW,
+                     "--config", self.cfg,
                      "--portfolio", os.path.join(self.tmp.name, "none.json"),
                      "--watchlist", os.path.join(self.tmp.name, "none.json"),
                      "--plan", os.path.join(self.tmp.name, "none.json")]
@@ -149,7 +153,8 @@ class Check(unittest.TestCase):
     def test_the_reel_tsla_morning(self):
         # The reel's real feed: Yahoo Finance headlines for TSLA, Monday Oct 19 2026, checked at 10:15 AM ET
         code, out, err = run(["--tickers", "TSLA", "--hours", "6", "--no-sec", "--no-moves",
-                              "--now", "2026-10-19T10:15:00-04:00"] + self.base[:4])
+                              "--now", "2026-10-19T10:15:00-04:00",
+                              "--offline", DIR, "--state", self.state, "--config", self.cfg])
         self.assertEqual(code, 0, err)
         self.assertIn("2026-10-19 08:04 ET  TSLA", out)
         self.assertNotIn("10:32 ET", out)  # published after the pinned 10:15 clock
@@ -162,7 +167,8 @@ class Check(unittest.TestCase):
         self.assertEqual(len([l for l in out.splitlines() if l.startswith("  2026-10-19")]), 16)  # 18 in the feed, 2 after 10:15
         # the price line, from the chart fetched at 10:52
         code, out, err = run(["--tickers", "TSLA", "--hours", "6", "--no-sec", "--dry-run",
-                              "--now", "2026-10-19T10:52:00-04:00"] + self.base[:4])
+                              "--now", "2026-10-19T10:52:00-04:00",
+                              "--offline", DIR, "--state", self.state, "--config", self.cfg])
         self.assertRegex(out, r"TSLA\s+366\.4[78] \+3\.31% vs yesterday's close 354\.72 at 10:52 ET  MOVING")
 
     def test_moves(self):

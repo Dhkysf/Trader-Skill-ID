@@ -334,7 +334,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     price  a FRESH latest price; a market order is sized at the higher of it and the plan's entry
     cash   the cash in trader/portfolio.json, if there is one
     today  New York date (YYYY-MM-DD); a plan for another day is refused"""
-    market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "us"
+    market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "idx"
     p = market.load(market_id)
     is_us = p.get("id") == "us"
     c, cfg_notices = market.merge_config(cfg, _defaults_for(p))

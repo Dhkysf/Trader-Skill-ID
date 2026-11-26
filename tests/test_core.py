@@ -113,12 +113,15 @@ class CoreTest(unittest.TestCase):
             market.round_tick(us, 10.0, "invalid")
 
     def test_from_config(self):
-        self.assertIs(market.from_config(None), market.load("us"))
-        self.assertIs(market.from_config("/nonexistent/config.json"), market.load("us"))
-        self.assertIs(market.from_config({}), market.load("us"))
+        self.assertIs(market.from_config(None), market.load("idx"))
+        self.assertIs(market.from_config("/nonexistent/config.json"), market.load("idx"))
+        self.assertIs(market.from_config({}), market.load("idx"))
         self.assertIs(market.from_config({"market": "us"}), market.load("us"))
         with tempfile.TemporaryDirectory() as d:
             cfg = os.path.join(d, "config.json")
+            with open(cfg, "w", encoding="utf-8") as fh:
+                fh.write('{}\n')
+            self.assertIs(market.from_config(cfg), market.load("idx"))
             with open(cfg, "w", encoding="utf-8") as fh:
                 fh.write('{"market": "us"}\n')
             self.assertIs(market.from_config(cfg), market.load("us"))
@@ -166,6 +169,7 @@ class CoreTest(unittest.TestCase):
     def test_tsla_parity_between_old_usd_and_new_currency_neutral_config(self):
         plan_path = os.path.join(FIX, "trader-budget", "plan-tsla.json")
         old_cfg = {
+            "market": "us",
             "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75,
             "max_order_usd": 4000, "min_order_usd": 5,
             "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150,
@@ -223,14 +227,14 @@ class CoreTest(unittest.TestCase):
 
         with open(os.path.join(FIX, "trader-budget", "plan-tsla.json"), encoding="utf-8") as fh:
             plan = json.load(fh)
-        s = size.size_trade(plan, {"budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
+        s = size.size_trade(plan, {"market": "us", "budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
                             today="2026-10-19")
         self.assertEqual(s["qty"], 6)
         self.assertEqual(len(s["notices"]), 1)
 
         with open(os.path.join(FIX, "trader-risk", "orders-tsla.json"), encoding="utf-8") as fh:
             order = json.load(fh)["orders"][0]
-        res = check.check([order], {"budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
+        res = check.check([order], {"market": "us", "budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
                           now=check.parse_now("2026-10-19 10:15"))
         self.assertEqual(res["results"][0]["verdict"], "BLOCK")
         self.assertTrue(any("max_loss_per_trade" in w for w in res["warnings"]))

@@ -876,7 +876,7 @@ class IdxBrokerTest(unittest.TestCase):
             # US: no fees, same cash and output as before, no fee in the journal
             us_cfg = os.path.join(d, "us.json")
             with open(us_cfg, "w", encoding="utf-8") as fh:
-                json.dump({"budget": 10000}, fh)
+                json.dump({"market": "us", "budget": 10000}, fh)
             us_pf, us_st = os.path.join(d, "us_pf.json"), os.path.join(d, "us_broker.json")
             code, out, err = self._run_ticket(["fill", "--symbol", "TSLA", "--side", "buy", "--qty", "8", "--price", "364.20",
                                                "--date", "2026-10-19", "--portfolio", us_pf, "--config", us_cfg,
@@ -899,17 +899,52 @@ class IdxTimeMachineRestTest(IdxTimeMachineTest):
         self.assertEqual(a, b)
 
         tsla_gz = os.path.join(FIX, "trader-timemachine", "TSLA-60d5m.json.gz")
-        out = io.StringIO()
-        with redirect_stdout(out):
-            code = tm.main([
-                "run", "--symbol", "TSLA", "--date", "2026-10-19", "--entry", "364.18",
-                "--stop", "358.32", "--target", "370.04", "--entry-time", "10:15 AM",
-                "--offline", tsla_gz, "--now", "2026-10-19 10:50",
-            ])
+        with tempfile.TemporaryDirectory() as d:
+            us_cfg = os.path.join(d, "us_config.json")
+            with open(us_cfg, "w", encoding="utf-8") as fh:
+                json.dump({"market": "us"}, fh)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                code = tm.main([
+                    "run", "--symbol", "TSLA", "--date", "2026-10-19", "--entry", "364.18",
+                    "--stop", "358.32", "--target", "370.04", "--entry-time", "10:15 AM",
+                    "--config", us_cfg, "--offline", tsla_gz, "--now", "2026-10-19 10:50",
+                ])
         self.assertEqual(code, 0)
         text = out.getvalue()
         for s in ("29.4 %", "25.5 %", "45.1 %", "fired 33 times: 13 target, 15 stop, 5 neither"):
             self.assertIn(s, text)
+
+
+class DefaultIdxWithoutMarketKey(unittest.TestCase):
+    def test_scanner_and_entry_default_to_idx_when_market_omitted(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({}, fh)
+            code, _, err = run_scan(["universe", "--config", cfg_p, "--no-write"])
+            self.assertEqual(code, 1)
+            self.assertIn("--from", err)
+
+            out_wl = os.path.join(d, "orb.json")
+            code, out, _ = run_scan([
+                "orb", "--config", cfg_p, "--offline", BBCA_5M,
+                "--now", "2026-11-26 14:30", "--out", out_wl,
+            ])
+            self.assertEqual(code, 0)
+            self.assertIn("WIB", out)
+            self.assertIn("Rp ", out)
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = entry.main([
+                    "check", "BBCA", "--config", cfg_p, "--offline", BBCA_5M,
+                    "--now", "2026-11-23 09:35",
+                ])
+            self.assertEqual(rc, 0)
+            self.assertIn("BBCA.JK", buf.getvalue())
+            self.assertIn("WIB", buf.getvalue())
+            self.assertIn("Rp ", buf.getvalue())
 
 
 if __name__ == "__main__":

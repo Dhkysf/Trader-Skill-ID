@@ -17,8 +17,8 @@ NOW = "2026-10-19 10:15"
 TODAY = "2026-10-19"
 REEL_V1 = {"AAPL": 1250, "AXP": 1119, "GOOGL": 823, "KO": 708, "BAC": 600}
 PRICES = {"AAPL": 341.27, "AXP": 309.84, "GOOGL": 353.78, "KO": 90.11, "BAC": 53.96}
-# the contract's v2 config, key for key
-CONTRACT_CFG = {
+# the US config used by US tests
+US_CFG = {
     "market": "us",
     "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 4000, "min_order": 5,
     "max_loss_per_trade": 50, "max_daily_loss": 150, "max_trades_per_day": 3, "max_orders_per_day": 10,
@@ -28,14 +28,23 @@ CONTRACT_CFG = {
     "allow_options": False, "allow_margin": False, "allow_short": False, "pdt_guard": False,
     "sec_user_agent": "Your Name you@example.com",
 }
+# the contract's IDX config, key for key
+CONTRACT_CFG = {
+    "market": "idx",
+    "budget": 10000000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 8000000, "min_order": 100000,
+    "max_loss_per_trade": 100000, "max_daily_loss": 300000, "max_trades_per_day": 3, "max_orders_per_day": 10,
+    "min_reward_risk": 1.0, "require_stop": True,
+    "no_entries_before": "09:15", "no_entries_after": "15:30", "flat_by": "15:45",
+    "fractional": False, "broker": "manual", "paper": True, "blocked": [],
+    "allow_options": False, "allow_margin": False, "allow_short": False,
+}
 # v1's rules, for the weights mode tests
-V1 = {"budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000, "min_order_usd": 5,
+V1 = {"market": "us", "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000, "min_order_usd": 5,
       "fractional": True, "paper": True, "blocked": []}
 
 
 def cfg(**over):
-    with open(CFG) as fh:
-        c = json.load(fh)
+    c = dict(US_CFG)
     for k in over:
         if k.endswith("_usd"):
             c.pop(k[:-4], None)
@@ -75,6 +84,13 @@ def run(argv):
 def prices_doc(price, quote_time="2026-10-19T14:52:13Z"):
     return {"as_of": quote_time, "source": "yahoo", "prices": {"TSLA": price},
             "detail": {"TSLA": {"prev_close": 354.72, "time": quote_time, "source": "yahoo"}}}
+
+
+def us_cfg_file(d):
+    p = os.path.join(d, "us_config.json")
+    with open(p, "w") as fh:
+        json.dump(US_CFG, fh)
+    return p
 
 
 class TheReel(unittest.TestCase):
@@ -124,7 +140,7 @@ class TheReel(unittest.TestCase):
     def test_cli_writes_one_bracket_order(self):
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "trader", "orders.json")
-            code, text, _ = run(["--plan", PLAN, "--config", CFG, "--portfolio", os.path.join(d, "none"),
+            code, text, _ = run(["--plan", PLAN, "--config", us_cfg_file(d), "--portfolio", os.path.join(d, "none"),
                                  "--now", NOW, "--write", out])
             self.assertEqual(code, 0)
             self.assertIn("Size: 8 shares of TSLA = $2,913.44 at 364.18", text)
@@ -140,8 +156,9 @@ class TheReel(unittest.TestCase):
             self.assertEqual(doc["orders"][0]["plan"]["max_loss"], 46.88)
 
     def test_cli_json_and_limit(self):
-        code, text, _ = run(["--plan", PLAN, "--config", CFG, "--portfolio", "/nonexistent", "--now", NOW,
-                             "--limit", "--json"])
+        with tempfile.TemporaryDirectory() as d:
+            code, text, _ = run(["--plan", PLAN, "--config", us_cfg_file(d), "--portfolio", "/nonexistent", "--now", NOW,
+                                 "--limit", "--json"])
         self.assertEqual(code, 0)
         out = json.loads(text)
         self.assertEqual(out["sizing"]["qty"], 8)
@@ -159,7 +176,7 @@ class PlanRules(unittest.TestCase):
             with open(p, "w") as fh:
                 json.dump(plan(stop=300.0), fh)
             out = os.path.join(d, "orders.json")
-            code, text, _ = run(["--plan", p, "--config", CFG, "--portfolio", os.path.join(d, "none"),
+            code, text, _ = run(["--plan", p, "--config", us_cfg_file(d), "--portfolio", os.path.join(d, "none"),
                                  "--now", NOW, "--write", out])
             self.assertEqual(code, 1)
             self.assertIn("No order:", text)
@@ -191,7 +208,7 @@ class PlanRules(unittest.TestCase):
             pp = os.path.join(d, "prices.json")
             with open(pp, "w") as fh:
                 json.dump(prices_doc(366.475), fh)
-            base = ["--plan", PLAN, "--config", CFG, "--portfolio", os.path.join(d, "none"), "--prices", pp, "--json"]
+            base = ["--plan", PLAN, "--config", us_cfg_file(d), "--portfolio", os.path.join(d, "none"), "--prices", pp, "--json"]
             code, text, _ = run(base + ["--now", "2026-10-19 10:55"])
             out = json.loads(text)
             self.assertEqual((code, out["sizing"]["qty"], out["orders"]), (1, 6, []))
@@ -205,7 +222,7 @@ class PlanRules(unittest.TestCase):
             pf = os.path.join(d, "portfolio.json")
             with open(pf, "w") as fh:
                 json.dump({"cash": 1200, "positions": []}, fh)
-            out = json.loads(run(["--plan", PLAN, "--config", CFG, "--portfolio", pf, "--now", NOW, "--json"])[1])
+            out = json.loads(run(["--plan", PLAN, "--config", us_cfg_file(d), "--portfolio", pf, "--now", NOW, "--json"])[1])
             self.assertEqual((out["sizing"]["qty"], out["sizing"]["bound_by"]), (1, "cash"))
 
     def test_bad_plans(self):
@@ -235,15 +252,17 @@ class PlanRules(unittest.TestCase):
         self.assertIsNone(size.bracket_order(s))
 
     def test_missing_plan_and_weights_only_flags(self):
-        code, _, err = run(["--plan", "/nonexistent/plan.json", "--config", CFG, "--now", NOW])
-        self.assertEqual(code, 1)
-        self.assertIn("no plan", err)
-        code, _, err = run(["--plan", PLAN, "--config", CFG, "--now", NOW, "--top", "2"])
-        self.assertEqual(code, 1)
-        self.assertIn("--weights", err)
-        code, _, err = run(["--plan", PLAN, "--config", CFG, "--now", "tomorrow"])
-        self.assertEqual(code, 1)
-        self.assertNotIn("Traceback", err)
+        with tempfile.TemporaryDirectory() as d:
+            c = us_cfg_file(d)
+            code, _, err = run(["--plan", "/nonexistent/plan.json", "--config", c, "--now", NOW])
+            self.assertEqual(code, 1)
+            self.assertIn("no plan", err)
+            code, _, err = run(["--plan", PLAN, "--config", c, "--now", NOW, "--top", "2"])
+            self.assertEqual(code, 1)
+            self.assertIn("--weights", err)
+            code, _, err = run(["--plan", PLAN, "--config", c, "--now", "tomorrow"])
+            self.assertEqual(code, 1)
+            self.assertNotIn("Traceback", err)
 
 
 class WeightsMode(unittest.TestCase):

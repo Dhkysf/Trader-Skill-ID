@@ -20,9 +20,18 @@ V1_TODAY = "2026-10-13"
 PRICES = {"AAPL": 341.27, "AXP": 309.84, "GOOGL": 353.78, "KO": 90.11, "BAC": 53.96}
 QUOTE_TIME = datetime.datetime(2026, 10, 19, 14, 52, 13)   # Yahoo's TSLA quote 366.475, 10:52:13 New York
 # v1's rules with every day-trade check switched off: the long-term checks still hold
-V1 = {"budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000, "min_order_usd": 5,
+V1 = {"market": "us", "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000, "min_order_usd": 5,
       "max_orders_per_day": 10, "require_stop": False, "no_entries_before": None, "no_entries_after": None,
       "max_trades_per_day": 0, "max_daily_loss_usd": 0, "max_loss_per_trade_usd": 0, "min_reward_risk": 0}
+US_CFG = {
+    "market": "us",
+    "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 4000, "min_order": 5,
+    "max_loss_per_trade": 50, "max_daily_loss": 150, "max_trades_per_day": 3, "max_orders_per_day": 10,
+    "min_reward_risk": 1.0, "require_stop": True,
+    "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
+    "fractional": False, "broker": "alpaca", "paper": True, "blocked": [],
+    "allow_options": False, "allow_margin": False, "allow_short": False, "pdt_guard": False,
+}
 
 
 def at(text):
@@ -30,8 +39,7 @@ def at(text):
 
 
 def cfg(**over):
-    with open(CFG_PATH) as fh:
-        c = json.load(fh)
+    c = dict(US_CFG)
     for k in over:
         if k.endswith("_usd"):
             c.pop(k[:-4], None)
@@ -123,7 +131,10 @@ class TheReel(unittest.TestCase):
             none = os.path.join(d, "none")
             buf = io.StringIO()
             with redirect_stdout(buf):
-                code = check.main(["--orders", TSLA_PATH, "--config", CFG_PATH, "--portfolio", none,
+                c = os.path.join(d, "us_config.json")
+                with open(c, "w") as fh:
+                    json.dump(US_CFG, fh)
+                code = check.main(["--orders", TSLA_PATH, "--config", c, "--portfolio", none,
                                    "--prices", none, "--state", none, "--now", NOW, "--out", out])
             text = buf.getvalue()
             self.assertEqual(code, 0)
@@ -472,7 +483,10 @@ class Cli(unittest.TestCase):
                            "detail": {"TSLA": {"time": "2026-10-19T14:52:13Z", "fetched": "2026-10-19T14:55:00Z"}}},
                           fh)
             none = os.path.join(d, "none")
-            base = ["--orders", TSLA_PATH, "--config", CFG_PATH, "--portfolio", none, "--prices", pp,
+            c = os.path.join(d, "us_config.json")
+            with open(c, "w") as fh:
+                json.dump(US_CFG, fh)
+            base = ["--orders", TSLA_PATH, "--config", c, "--portfolio", none, "--prices", pp,
                     "--state", none, "--no-write"]
             buf = io.StringIO()
             with redirect_stdout(buf):

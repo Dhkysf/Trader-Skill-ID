@@ -139,6 +139,7 @@ class Cli(unittest.TestCase):
         self.cwd = os.getcwd()
         os.chdir(self.d)
         os.mkdir("trader")
+        self.write(os.path.join("trader", "config.json"), {"market": "us"})
 
     def tearDown(self):
         os.chdir(self.cwd)
@@ -239,12 +240,12 @@ class Cli(unittest.TestCase):
 
     def test_flat_by_config_half_day_and_late_entries(self):
         self.write(os.path.join("trader", "entry.json"), REEL_ENTRY)
-        self.write(os.path.join("trader", "config.json"), {"flat_by": "15:45", "min_reward_risk": 1.5})
+        self.write(os.path.join("trader", "config.json"), {"market": "us", "flat_by": "15:45", "min_reward_risk": 1.5})
         code, text, _ = self.plan("--target", "1R", "--json")
         p = json.loads(text)
         self.assertEqual(p["flat_by"], "15:45")
         self.assertIn("under your min_reward_risk 1.5", p["warnings"][0])
-        os.remove(os.path.join("trader", "config.json"))
+        self.write(os.path.join("trader", "config.json"), {"market": "us"})
 
         half = dict(REEL_ENTRY, date="2026-11-27")
         self.write(os.path.join("trader", "entry.json"), half)

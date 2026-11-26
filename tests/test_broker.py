@@ -109,7 +109,16 @@ class Flow(unittest.TestCase):
         self.orders = os.path.join(self.d, "orders.json")
         shutil.copy(ORDERS_PATH, self.orders)
         self.cfg = os.path.join(self.d, "config.json")
-        shutil.copy(CFG_PATH, self.cfg)
+        with open(self.cfg, "w") as fh:
+            json.dump({
+                "market": "us",
+                "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 4000, "min_order": 5,
+                "max_loss_per_trade": 50, "max_daily_loss": 150, "max_trades_per_day": 3, "max_orders_per_day": 10,
+                "min_reward_risk": 1.0, "require_stop": True,
+                "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
+                "fractional": False, "broker": "alpaca", "paper": True, "blocked": [],
+                "allow_options": False, "allow_margin": False, "allow_short": False, "pdt_guard": False,
+            }, fh)
         self.risk = os.path.join(self.d, "state", "risk.json")
         self.state = os.path.join(self.d, "state", "broker.json")
         self.pf = os.path.join(self.d, "portfolio.json")
@@ -184,12 +193,12 @@ class Flow(unittest.TestCase):
 
         code, text, _ = run(self.args("show", "--index", "1"))
         self.assertIn("DONE: placed", text)
-        code, text, _ = run(["log", "--state", self.state, "--now", NOW])
+        code, text, _ = run(["log", "--state", self.state, "--config", self.cfg, "--now", NOW])
         self.assertIn("1 placed today", text)
         self.assertIn("max loss $46.88", text)
 
         # trader-risk now counts it: a second TSLA buy today is a duplicate, and $46.88 is used
-        res = check.check([tsla()], {"budget": 5000}, state=st, now=check.parse_now("2026-10-19 10:30"))
+        res = check.check([tsla()], {"market": "us", "budget": 5000}, state=st, now=check.parse_now("2026-10-19 10:30"))
         self.assertIn("already placed today", " ".join(res["results"][0]["reasons"]))
         self.assertEqual((res["today"]["entries_placed"], res["today"]["loss_at_risk"]), (1, 46.88))
 
@@ -224,7 +233,7 @@ class Flow(unittest.TestCase):
         self.assertEqual((pf["cash"], pf["positions"]), (5015.2, []))
         self.assertEqual(check.day_trades(self.state_doc(), TODAY), (1, ["2026-10-19 TSLA"]))
         code, _, err = run(["flatten", "--symbol", "TSLA", "--orders", self.orders, "--portfolio", self.pf,
-                            "--now", late])
+                            "--config", self.cfg, "--now", late])
         self.assertEqual(code, 1)
         self.assertIn("nothing to flatten", err)
 
@@ -233,7 +242,7 @@ class Flow(unittest.TestCase):
                              "--portfolio", self.none, "--plan", self.none, "--config", self.cfg, "--now", NOW])
         self.assertEqual(code, 0)
         self.assertNotIn("Check it against get_open_position", text)
-        self.assertEqual(run(["flatten", "--symbol", "TSLA", "--qty", "0", "--orders", self.orders])[0], 1)
+        self.assertEqual(run(["flatten", "--symbol", "TSLA", "--qty", "0", "--orders", self.orders, "--config", self.cfg])[0], 1)
 
     def test_an_edited_order_is_not_ready(self):
         self.run_risk()

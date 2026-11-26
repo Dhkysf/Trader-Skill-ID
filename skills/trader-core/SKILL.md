@@ -3,7 +3,7 @@ name: trader-core
 description: >-
   Shared market profiles, trading calendars, DST clock conversions, and tick
   rounding for all Trader-Skill-ID skills. Reads the selected market profile
-  (default "us") from JSON data files under markets/ so US stocks, IDX, and
+  (default "idx") from JSON data files under markets/ so US stocks, IDX, and
   forex share one clock and session layer without duplicating rules.
 ---
 
@@ -17,11 +17,11 @@ standalone trading command.
 ## Configuration
 
 Set `"market"` in `trader/config.json` inside your working folder to choose the
-active market profile. When omitted or empty, it defaults to `"us"`.
+active market profile. When omitted or empty, it defaults to `"idx"`.
 
 ```json
 {
-  "market": "us"
+  "market": "idx"
 }
 ```
 

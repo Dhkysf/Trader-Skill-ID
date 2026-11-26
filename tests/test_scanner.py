@@ -481,6 +481,9 @@ class Cli(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.t = os.path.join(self.d, "trader")
         self.wl = os.path.join(self.t, "watchlist.json")
+        self.cfg = os.path.join(self.d, "us_config.json")
+        with open(self.cfg, "w") as fh:
+            json.dump({"market": "us"}, fh)
 
     def tearDown(self):
         shutil.rmtree(self.d)
@@ -491,7 +494,7 @@ class Cli(unittest.TestCase):
 
     def test_universe_daily_orb_end_to_end(self):
         uni = os.path.join(self.t, "universe.txt")
-        code, text, _ = run(["universe", "--offline", SYMDIR, "--out", uni])
+        code, text, _ = run(["universe", "--config", self.cfg, "--offline", SYMDIR, "--out", uni])
         self.assertEqual(code, 0)
         self.assertIn("Kept 17 US-listed", text)
         with open(uni, encoding="utf-8") as fh:
@@ -500,7 +503,7 @@ class Cli(unittest.TestCase):
         self.assertIn("BRK.B|Berkshire Hathaway Inc. New Common Stock", lines)
 
         # daily over that universe with the fixture charts: only KO and TSLA are in both, so partial
-        code, text, _ = run(["daily", "--universe", uni, "--offline", DAILY, "--now", "2026-10-19 09:00",
+        code, text, _ = run(["daily", "--config", self.cfg, "--universe", uni, "--offline", DAILY, "--now", "2026-10-19 09:00",
                              "--out", self.wl, "--min-volume", "0"])
         self.assertEqual(code, 0)
         self.assertIn("Fetched 2 of 17 charts (15 failed or had no data)", text)
@@ -511,7 +514,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(doc["as_of"], "2026-10-16 close")
 
         # the reel's 10:15 scan
-        code, text, _ = run(["orb", "--offline", WALL, "--now", "2026-10-19 10:15", "--min-price", "0",
+        code, text, _ = run(["orb", "--config", self.cfg, "--offline", WALL, "--now", "2026-10-19 10:15", "--min-price", "0",
                              "--out", self.wl])
         self.assertEqual(code, 0)
         self.assertIn("42 of 231 charts closed above their opening-range high by 10:15 AM", text)
@@ -527,7 +530,7 @@ class Cli(unittest.TestCase):
                        "bar_index": 8, "or_high": 362.18, "or_low": 354.47, "pct_over": 0.55}, doc["hits"])
 
         # the hits read back as a watchlist, with --at instead of --now
-        code, text, _ = run(["orb", "--offline", WALL, "--at", "10:15", "--watchlist", self.wl, "--min-price", "0",
+        code, text, _ = run(["orb", "--config", self.cfg, "--offline", WALL, "--at", "10:15", "--watchlist", self.wl, "--min-price", "0",
                              "--json", "--no-write"])
         self.assertEqual(code, 0)
         out = json.loads(text)
@@ -556,7 +559,7 @@ class Cli(unittest.TestCase):
         with open(uni, "w") as fh:
             fh.write("\n".join(sorted(bundle)) + "\n")
         try:
-            code, text, _ = run(["orb", "--universe", uni, "--now", "2026-10-19 10:15", "--min-price", "0",
+            code, text, _ = run(["orb", "--config", self.cfg, "--universe", uni, "--now", "2026-10-19 10:15", "--min-price", "0",
                                  "--max-confirm", "10", "--no-write"])
         finally:
             scan.yahoo_get, scan.SLEEP, scan.parse_now = old_get, old_sleep, real_now
@@ -569,36 +572,36 @@ class Cli(unittest.TestCase):
         self.assertTrue(all("range=1d&interval=5m" in c for c in calls))
 
     def test_plain_messages_and_exit_codes(self):
-        code, _, err = run(["orb", "--offline", WALL, "--now", "2026-10-17 10:15", "--out", self.wl])
+        code, _, err = run(["orb", "--config", self.cfg, "--offline", WALL, "--now", "2026-10-17 10:15", "--out", self.wl])
         self.assertEqual(code, 1)
         self.assertIn("No session on Sat 2026-10-17 (weekend)", err)
         self.assertNotIn("Traceback", err)
         self.assertFalse(os.path.exists(self.wl))
-        code, _, err = run(["orb", "--offline", WALL, "--now", "2026-10-19 09:44", "--out", self.wl])
+        code, _, err = run(["orb", "--config", self.cfg, "--offline", WALL, "--now", "2026-10-19 09:44", "--out", self.wl])
         self.assertIn("after 9:50 AM", err)
         cfg = os.path.join(self.t, "config.json")
         os.makedirs(self.t)
         with open(cfg, "w") as fh:
-            json.dump({"no_entries_after": "10:00"}, fh)
+            json.dump({"market": "us", "no_entries_after": "10:00"}, fh)
         code, _, err = run(["orb", "--offline", WALL, "--now", "2026-10-19 10:15", "--config", cfg])
         self.assertEqual(code, 1)
         self.assertIn("expired", err)
-        code, _, err = run(["orb", "--offline", WALL])
+        code, _, err = run(["orb", "--config", self.cfg, "--offline", WALL])
         self.assertIn("--at HH:MM", err)
-        code, text, _ = run(["orb", "--offline", WALL, "--now", "2026-10-19 10:10", "--symbols", "TSLA",
+        code, text, _ = run(["orb", "--config", self.cfg, "--offline", WALL, "--now", "2026-10-19 10:10", "--symbols", "TSLA",
                              "--out", self.wl])
         self.assertEqual(code, 1)                          # no breakout yet, but the empty list is written
         self.assertIn("No chart closed above its opening-range high by 10:10 AM", text)
         self.assertEqual(self.read(self.wl)["hits"], [])
-        code, _, err = run(["daily", "--universe", os.path.join(self.d, "nope.txt")])
+        code, _, err = run(["daily", "--config", self.cfg, "--universe", os.path.join(self.d, "nope.txt")])
         self.assertEqual(code, 1)
         self.assertIn("scan.py universe", err)
-        code, _, err = run(["daily", "--offline", os.path.join(self.d, "nothing-here")])
+        code, _, err = run(["daily", "--config", self.cfg, "--offline", os.path.join(self.d, "nothing-here")])
         self.assertIn("no offline file", err)
         empty = os.path.join(self.d, "empty.json")
         with open(empty, "w") as fh:
             fh.write("{}")
-        code, _, err = run(["daily", "--offline", empty])
+        code, _, err = run(["daily", "--config", self.cfg, "--offline", empty])
         self.assertEqual(code, 1)
         self.assertIn("no symbols to scan", err)
 
@@ -610,7 +613,7 @@ class Cli(unittest.TestCase):
         for sym in ("TSLA", "AAPL", "KO", "SQ"):
             with open(os.path.join(folder, sym + ".json"), "w") as fh:
                 json.dump(bundle[sym], fh)
-        code, text, _ = run(["orb", "--offline", folder, "--now", "2026-10-19 10:15", "--no-write", "--json"])
+        code, text, _ = run(["orb", "--config", self.cfg, "--offline", folder, "--now", "2026-10-19 10:15", "--no-write", "--json"])
         out = json.loads(text)
         self.assertEqual((out["universe"], out["scanned"], out["failed"]), (4, 3, 1))
         self.assertEqual([h["symbol"] for h in out["hits"]], ["AAPL", "TSLA"])
@@ -625,16 +628,16 @@ class Cli(unittest.TestCase):
         with open(js, "w") as fh:
             json.dump({"hits": [{"symbol": "tsla"}, {"symbol": "KO"}]}, fh)
         self.assertEqual(scan.symbols_from_file(js), ["TSLA", "KO"])
-        code, text, _ = run(["daily", "--offline", DAILY, "--watchlist", txt, "--now", "2026-10-19 09:00",
+        code, text, _ = run(["daily", "--config", self.cfg, "--offline", DAILY, "--watchlist", txt, "--now", "2026-10-19 09:00",
                              "--json", "--no-write", "--min-volume", "0"])
         out = json.loads(text)
         self.assertEqual((out["universe"], out["scanned"]), (2, 2))
-        code, text, _ = run(["daily", "--offline", DAILY, "--limit", "3", "--now", "2026-10-19 09:00", "--json",
+        code, text, _ = run(["daily", "--config", self.cfg, "--offline", DAILY, "--limit", "3", "--now", "2026-10-19 09:00", "--json",
                              "--no-write", "--min-volume", "0"])
         self.assertEqual(json.loads(text)["universe"], 3)
 
     def test_daily_json(self):
-        code, text, _ = run(["daily", "--offline", DAILY, "--now", "2026-10-19 09:00", "--json", "--no-write",
+        code, text, _ = run(["daily", "--config", self.cfg, "--offline", DAILY, "--now", "2026-10-19 09:00", "--json", "--no-write",
                              "--min-volume", "0", "--min-price", "0"])
         self.assertEqual(code, 0)
         out = json.loads(text)
