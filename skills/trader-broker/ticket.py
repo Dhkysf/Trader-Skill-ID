@@ -467,9 +467,9 @@ def ticket_json(order, idx, cfg, risk, state, today):
 
 # ---------------------------------------------------------------- fills -> portfolio
 
-def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date):
+def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=None):
     """Record a filled order in trader/portfolio.json: cash and shares, with a
-    cost-basis lot per buy (oldest lots are relieved first on a sell)."""
+    cost-basis lot per buy (fees from market.fees, config wins; buy fee goes into lot cost)."""
     pf = read_json(portfolio_path, "portfolio", required=False)
     if pf is None:
         budget = cfg.get("budget")
@@ -480,19 +480,26 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date):
     qty, price = float(qty), float(price)
     if qty <= 0 or price <= 0:
         raise TicketError("a fill needs a positive qty and price")
+    if fee is None:
+        pct = market.fees(p, cfg)[0 if side == "buy" else 1]
+        step = Decimal("1") if (p or {}).get("currency") == "IDR" else Decimal("0.01")
+        fee = float((market._to_decimal(qty) * market._to_decimal(price) * market._to_decimal(pct) / 100)
+                    .quantize(step, rounding=ROUND_HALF_UP))
+    elif fee < 0:
+        raise TicketError("--fee wants the broker's fee, 0 or more")
     cost = round(qty * price, 2)
     pos = None
-    for p in pf.setdefault("positions", []):
-        if str(p.get("ticker", "")).upper() == symbol:
-            pos = p
+    for pr in pf.setdefault("positions", []):
+        if str(pr.get("ticker", "")).upper() == symbol:
+            pos = pr
     if side == "buy":
         if pos is None:
             pos = {"ticker": symbol, "shares": 0.0, "lots": []}
             pf["positions"].append(pos)
         lots = pos.setdefault("lots", [])
-        lots.append({"id": "%s-%d" % (symbol, len(lots) + 1), "date": date, "shares": qty, "cost": cost})
+        lots.append({"id": "%s-%d" % (symbol, len(lots) + 1), "date": date, "shares": qty, "cost": round(cost + fee, 2)})
         pos["shares"] = round(float(pos.get("shares", 0)) + qty, 6)
-        pf["cash"] = round(float(pf.get("cash", 0)) - cost, 2)
+        pf["cash"] = round(float(pf.get("cash", 0)) - cost - fee, 2)
     else:
         if pos is None or float(pos.get("shares", 0)) + 1e-9 < qty:
             raise TicketError("cannot record selling %s %s: the portfolio holds %s"
@@ -510,19 +517,22 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date):
         pos["shares"] = round(float(pos["shares"]) - qty, 6)
         if pos["shares"] <= 1e-9:
             pf["positions"].remove(pos)
-        pf["cash"] = round(float(pf.get("cash", 0)) + cost, 2)
+        pf["cash"] = round(float(pf.get("cash", 0)) + cost - fee, 2)
     write_json(portfolio_path, pf)
-    return pf
+    return pf, fee
 
 
-def log_fill(state_path, now, today, symbol, side, qty, price, p=None):
+def log_fill(state_path, now, today, symbol, side, qty, price, p=None, fee=None):
     """A fill in the log, so trader-risk can count day trades (a buy and a sell the same day)."""
     state = load_state(state_path)
     px_s = _p(price) if (p or _US).get("id") == "us" else _money(price, p)
-    state.setdefault("orders", []).append({
+    entry = {
         "at": ny_iso(now, p=p), "date": today, "status": "filled", "symbol": symbol.upper(), "side": side,
         "qty": _str_num(float(qty)), "price": float(price),
-        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), symbol.upper(), px_s)})
+        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), symbol.upper(), px_s)}
+    if fee is not None:
+        entry["fee"] = fee
+    state.setdefault("orders", []).append(entry)
     write_json(state_path, state)
 
 
@@ -645,9 +655,10 @@ def cmd_result(a):
     write_json(a.state, state)
     print("Recorded order %d as %s." % (a.index, a.status))
     if a.status == "placed" and a.filled_qty and a.filled_price:
-        apply_fill(a.portfolio, cfg, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, today)
-        log_fill(a.state, now, today, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, p=p)
-        print("Added the fill to %s." % a.portfolio)
+        _, fee = apply_fill(a.portfolio, cfg, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, today, p, a.fee)
+        shown = fee if (fee or a.fee is not None) else None
+        log_fill(a.state, now, today, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, p=p, fee=shown)
+        print("Added the fill to %s%s." % (a.portfolio, (" (fee %s)" % _money(fee, p)) if shown is not None else ""))
     elif a.status == "placed":
         print("When it fills, record it: ticket.py fill --symbol %s --side %s --qty Q --price P"
               % (rec["symbol"], rec["side"]))
@@ -663,11 +674,13 @@ def cmd_fill(a):
     date = a.date or market.to_local(p, now).date().isoformat()
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         raise TicketError("--date wants a date like 2026-10-19")
-    pf = apply_fill(a.portfolio, cfg, a.symbol, a.side, a.qty, a.price, date)
-    log_fill(a.state, now, date, a.symbol, a.side, a.qty, a.price, p=p)
-    print("Recorded %s %s %s at %s on %s in %s. Cash now %s." % (a.side, a.qty, a.symbol.upper(),
-                                                                _money(a.price, p), date, a.portfolio,
-                                                                _money(pf["cash"], p)))
+    pf, fee = apply_fill(a.portfolio, cfg, a.symbol, a.side, a.qty, a.price, date, p, a.fee)
+    shown = fee if (fee or a.fee is not None) else None
+    log_fill(a.state, now, date, a.symbol, a.side, a.qty, a.price, p=p, fee=shown)
+    fee_s = (", fee %s" % _money(fee, p)) if shown is not None else ""
+    print("Recorded %s %s %s at %s on %s in %s%s. Cash now %s." % (a.side, a.qty, a.symbol.upper(),
+                                                                  _money(a.price, p), date, a.portfolio,
+                                                                  fee_s, _money(pf["cash"], p)))
     return 0
 
 
@@ -780,12 +793,14 @@ def main(argv=None):
     p.add_argument("--note")
     p.add_argument("--filled-qty")
     p.add_argument("--filled-price")
+    p.add_argument("--fee", type=float, help="the real fee from your broker app (default: from the market's fees)")
     p.add_argument("--portfolio", default="trader/portfolio.json")
     p = sub.add_parser("fill", help="record a fill in trader/portfolio.json")
     p.add_argument("--symbol", required=True)
     p.add_argument("--side", required=True, choices=["buy", "sell"])
     p.add_argument("--qty", required=True)
     p.add_argument("--price", required=True)
+    p.add_argument("--fee", type=float, help="the real fee from your broker app (default: from the market's fees)")
     p.add_argument("--date", help="YYYY-MM-DD (default: today in New York)")
     p.add_argument("--now")
     p.add_argument("--portfolio", default="trader/portfolio.json")

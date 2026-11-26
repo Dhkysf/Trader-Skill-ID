@@ -787,11 +787,12 @@ class IdxBrokerTest(unittest.TestCase):
             self.assertNotIn("place_stock_order", out_a)
 
             # Result & fill journalling
-            code_r, _, err_r = self._run_ticket([
+            code_r, out_r, err_r = self._run_ticket([
                 "result", "--index", "1", "--status", "placed", "--filled-qty", "300",
                 "--filled-price", "9875", "--portfolio", pf_p,
             ] + common)
             self.assertEqual(code_r, 0, err_r)
+            self.assertIn("fee Rp 4.444", out_r)
             code_f, _, err_f = self._run_ticket([
                 "fill", "--symbol", "BBCA", "--side", "sell", "--qty", "300", "--price", "10200",
                 "--date", "2026-11-23", "--portfolio", pf_p, "--config", cfg_p, "--state", state_p,
@@ -800,7 +801,8 @@ class IdxBrokerTest(unittest.TestCase):
             self.assertEqual(code_f, 0, err_f)
             with open(pf_p, encoding="utf-8") as fh:
                 pf = json.load(fh)
-            self.assertEqual((pf["cash"], pf["positions"]), (10097500.0, []))
+            # incl. buy fee Rp 4.444 and sell fee Rp 7.650
+            self.assertEqual((pf["cash"], pf["positions"]), (10085406.0, []))
 
             code_l, out_l, _ = self._run_ticket(["log", "--state", state_p, "--config", cfg_p, "--now", "2026-11-23 15:05"])
             self.assertEqual(code_l, 0)
@@ -815,6 +817,56 @@ class IdxBrokerTest(unittest.TestCase):
             code_e, text_e, _ = self._run_ticket(["show", "--index", "1"] + common)
             self.assertEqual(code_e, 1)
             self.assertIn("was not in the last risk check", text_e)
+
+    def test_fill_deducts_idx_fees_and_fee_override(self):
+        # Fees from markets/idx.json (buy 0.15%, sell 0.25%, checked 2026-11-27): 300*9875*0.15% = 4443.75 -> Rp 4.444,
+        # 300*9700*0.25% = Rp 7.275; price loss 300*175 = 52.500
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000}, fh)
+
+            def fill(pf_p, side, price, *extra):
+                return self._run_ticket(["fill", "--symbol", "BBCA", "--side", side, "--qty", "300", "--price", price,
+                                         "--date", "2026-11-23", "--portfolio", pf_p, "--config", cfg_p,
+                                         "--state", os.path.join(d, "broker.json"), "--now", "2026-11-23 10:15"] + list(extra))
+
+            pf_p = os.path.join(d, "pf.json")
+            code, out, err = fill(pf_p, "buy", "9875")
+            self.assertEqual(code, 0, err)
+            self.assertIn("fee Rp 4.444", out)
+            with open(pf_p, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["positions"][0]["lots"][0]["cost"], 2962500 + 4444)
+            code, out, err = fill(pf_p, "sell", "9700")
+            self.assertEqual(code, 0, err)
+            self.assertIn("fee Rp 7.275", out)
+            with open(pf_p, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["cash"], 10000000 - 52500 - 4444 - 7275)
+            with open(os.path.join(d, "broker.json"), encoding="utf-8") as fh:
+                self.assertEqual([r.get("fee") for r in json.load(fh)["orders"]], [4444.0, 7275.0])
+
+            # --fee: the real fee from the broker app wins
+            pf2 = os.path.join(d, "pf2.json")
+            code, out, err = fill(pf2, "buy", "9875", "--fee", "5000")
+            self.assertEqual(code, 0, err)
+            self.assertIn("fee Rp 5.000", out)
+            with open(pf2, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["cash"], 10000000 - 2962500 - 5000)
+
+            # US: no fees, same cash and output as before, no fee in the journal
+            us_cfg = os.path.join(d, "us.json")
+            with open(us_cfg, "w", encoding="utf-8") as fh:
+                json.dump({"budget": 10000}, fh)
+            us_pf, us_st = os.path.join(d, "us_pf.json"), os.path.join(d, "us_broker.json")
+            code, out, err = self._run_ticket(["fill", "--symbol", "TSLA", "--side", "buy", "--qty", "8", "--price", "364.20",
+                                               "--date", "2026-10-19", "--portfolio", us_pf, "--config", us_cfg,
+                                               "--state", us_st, "--now", "2026-10-19 10:15"])
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("fee", out)
+            with open(us_pf, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["cash"], 7086.4)
+            with open(us_st, encoding="utf-8") as fh:
+                self.assertNotIn("fee", json.load(fh)["orders"][0])
 
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):

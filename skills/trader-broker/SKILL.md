@@ -209,7 +209,9 @@ Rp 9.875, stop Rp 9.700, target Rp 10.200, max loss incl. fees Rp 64.219.
 Enter it in your broker app yourself.`) with no Alpaca or MCP JSON.
 Explicit per-order `"yes"` (`ticket.py approve`), the `trader-risk` PASS
 fingerprint, `ticket.py result`, and `ticket.py fill` journalling all still
-apply.
+apply. On IDX, fills deduct the buy/sell fee from cash (from `markets\idx.json`
+or your config's `buy_fee_pct` / `sell_fee_pct`), add the buy fee to the lot's
+cost basis, and accept `--fee AMOUNT` to use the real fee from your broker app.
 
 ## Safety
 
