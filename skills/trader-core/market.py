@@ -4,6 +4,7 @@
 import datetime
 import json
 import os
+import sys
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
 MARKETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "markets")
@@ -119,19 +120,99 @@ def sessions(p, d):
     return out
 
 
+def _to_decimal(price):
+    if isinstance(price, Decimal):
+        return price
+    if isinstance(price, float):
+        return Decimal(repr(price))
+    return Decimal(str(price))
+
+
+def tick_size(p, price):
+    """Return the tick size (as Decimal) for `price` under profile `p`."""
+    d = _to_decimal(price)
+    table = p.get("tick_table")
+    if table:
+        for entry in table:
+            if entry["below"] is None or d < Decimal(str(entry["below"])):
+                return Decimal(str(entry["tick"]))
+    return Decimal(str(p["tick"]))
+
+
 def round_tick(p, price, mode="nearest"):
     """Round `price` to the profile's tick size using mode 'down', 'up', or 'nearest'."""
     rounding = _ROUND_MODES.get(mode)
     if rounding is None:
         raise ValueError("unknown round_tick mode %r; expected down, up, or nearest" % (mode,))
-    if isinstance(price, Decimal):
-        d = price
-    elif isinstance(price, float):
-        d = Decimal(repr(price))
-    else:
-        d = Decimal(str(price))
-    step = Decimal(str(p["tick"]))
+    d = _to_decimal(price)
+    step = tick_size(p, d)
     return (d / step).to_integral_value(rounding=rounding) * step
+
+
+def valid_tick(p, price):
+    """True if `price` is >= min_price (if set), > 0, and a valid tick multiple."""
+    d = _to_decimal(price)
+    min_p = p.get("min_price")
+    if min_p is not None and d < Decimal(str(min_p)):
+        return False
+    if d <= 0:
+        return False
+    return (d % tick_size(p, d)) == 0
+
+
+def round_lot(p, shares):
+    """Round `shares` down to a whole multiple of the profile's lot size."""
+    lot = int(p.get("lot", 1))
+    if shares < 0:
+        raise ValueError("shares must be >= 0")
+    return (int(shares) // lot) * lot
+
+
+def ar_limits(p, reference_price, day=None):
+    """Return (lowest, highest) auto-rejection prices as Decimals rounded to valid ticks, or None."""
+    rules = p.get("auto_rejection")
+    if not rules:
+        return None
+    if day is None:
+        d = datetime.date.today()
+    elif isinstance(day, str):
+        d = datetime.date.fromisoformat(day)
+    else:
+        d = _as_date(day)
+    day_s = d.isoformat()
+    rule = None
+    for r in sorted(rules, key=lambda x: x["effective_from"], reverse=True):
+        if r["effective_from"] <= day_s:
+            rule = r
+            break
+    if rule is None:
+        raise ValueError("no auto_rejection rule for %s" % day_s)
+    if rule.get("valid_until") and day_s > rule["valid_until"]:
+        print(
+            "Warning: auto_rejection rule expired %s; check the current ARA/ARB rule on idx.co.id and update markets/idx.json"
+            % rule["valid_until"],
+            file=sys.stderr,
+        )
+    ref = _to_decimal(reference_price)
+    if ref <= 0:
+        raise ValueError("reference_price must be > 0")
+    band = None
+    for b in rule["bands"]:
+        if b["max_price"] is None or ref <= Decimal(str(b["max_price"])):
+            band = b
+            break
+    if "down_abs" in band:
+        raw_low = ref - Decimal(str(band["down_abs"]))
+    else:
+        raw_low = ref * (Decimal("100") - Decimal(str(band["down_pct"]))) / Decimal("100")
+    if "up_abs" in band:
+        raw_high = ref + Decimal(str(band["up_abs"]))
+    else:
+        raw_high = ref * (Decimal("100") + Decimal(str(band["up_pct"]))) / Decimal("100")
+    min_p = p.get("min_price")
+    if min_p is not None:
+        raw_low = max(raw_low, Decimal(str(min_p)))
+    return (round_tick(p, raw_low, "up"), round_tick(p, raw_high, "down"))
 
 
 _CURRENCY_PREFIX = {"USD": "$"}

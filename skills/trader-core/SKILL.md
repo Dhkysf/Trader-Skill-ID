@@ -30,8 +30,9 @@ active market profile. When omitted or empty, it defaults to `"us"`.
 | profile | market | timezone | currency | status |
 | --- | --- | --- | --- | --- |
 | `us` | US Equities (NYSE/Nasdaq) | `us_eastern` (UTC-5 / UTC-4) | `USD` | active |
+| `idx` | Indonesia Stock Exchange (IDX/BEI) | `asia_jakarta` (UTC+7, WIB) | `IDR` | active |
 
-Planned profiles: `idx` (Indonesia Stock Exchange) and `forex`.
+Planned profiles: `forex`.
 
 ## How other skills import it
 
@@ -55,7 +56,11 @@ import market
 - `local_to_utc(p, local)` - convert naive local wall-clock datetime to naive UTC.
 - `is_trading_day(p, d)` - `True` if `d` has scheduled sessions and is not a holiday.
 - `sessions(p, d)` - list of `(open_time, close_time)` `datetime.time` tuples for `d` (`[]` on holidays/weekends; early-close applied).
-- `round_tick(p, price, mode="nearest")` - round `price` to `p["tick"]` as a `Decimal` (`"down"`, `"up"`, or `"nearest"`).
+- `round_tick(p, price, mode="nearest")` - round `price` to `p`'s tick size as a `Decimal` (`"down"`, `"up"`, or `"nearest"`).
+- `tick_size(p, price)` - return the tick size (`Decimal`) for `price` (supports tiered `tick_table` or flat `tick`).
+- `valid_tick(p, price)` - `True` if `price` is `>= min_price`, `> 0`, and a valid tick multiple.
+- `round_lot(p, shares)` - round `shares` down to a whole multiple of `p["lot"]`.
+- `ar_limits(p, reference_price, day=None)` - return `(lowest, highest)` auto-rejection `Decimal` prices rounded to valid ticks, or `None`.
 
 ## Profile data (`markets/*.json`)
 

@@ -1,0 +1,98 @@
+{
+  "id": "idx",
+  "name": "Indonesia Stock Exchange (IDX/BEI)",
+  "exchange": "IDX",
+  "timezone": "asia_jakarta",
+  "tz_label": "WIB",
+  "utc_offset_std": 7,
+  "utc_offset_dst": 7,
+  "dst": null,
+  "sessions": {
+    "mon": [["09:00", "12:00"], ["13:30", "15:50"]],
+    "tue": [["09:00", "12:00"], ["13:30", "15:50"]],
+    "wed": [["09:00", "12:00"], ["13:30", "15:50"]],
+    "thu": [["09:00", "12:00"], ["13:30", "15:50"]],
+    "fri": [["09:00", "11:30"], ["14:00", "15:50"]]
+  },
+  "holidays": {
+    "2026-01-01": "IDX trading holiday",
+    "2026-01-16": "IDX trading holiday",
+    "2026-02-16": "IDX trading holiday",
+    "2026-02-17": "IDX trading holiday",
+    "2026-03-18": "IDX trading holiday",
+    "2026-03-19": "IDX trading holiday",
+    "2026-03-20": "IDX trading holiday",
+    "2026-03-23": "IDX trading holiday",
+    "2026-03-24": "IDX trading holiday",
+    "2026-04-03": "IDX trading holiday",
+    "2026-05-01": "IDX trading holiday",
+    "2026-05-14": "IDX trading holiday",
+    "2026-05-15": "IDX trading holiday",
+    "2026-05-27": "IDX trading holiday",
+    "2026-05-28": "IDX trading holiday",
+    "2026-06-01": "IDX trading holiday",
+    "2026-06-16": "IDX trading holiday",
+    "2026-08-17": "IDX trading holiday",
+    "2026-08-25": "IDX trading holiday",
+    "2026-12-24": "IDX trading holiday",
+    "2026-12-25": "IDX trading holiday",
+    "2026-12-31": "IDX trading holiday"
+  },
+  "calendar_years": [2026],
+  "currency": "IDR",
+  "lot": 100,
+  "min_price": 1,
+  "yahoo_suffix": ".JK",
+  "data_delay_min": 10,
+  "tick_table": [
+    {"below": 200, "tick": 1},
+    {"below": 500, "tick": 2},
+    {"below": 2000, "tick": 5},
+    {"below": 5000, "tick": 10},
+    {"below": null, "tick": 25}
+  ],
+  "auto_rejection": [
+    {
+      "effective_from": "2026-10-20",
+      "valid_until": "2026-12-31",
+      "source": {
+        "url": "https://www.idx.co.id/id/berita/siaran-pers/2735",
+        "rule": "Peraturan II-A, Kep-00158/BEI/10-2026",
+        "checked": "2026-11-27"
+      },
+      "bands": [
+        {"max_price": 10, "up_abs": 1, "down_abs": 1},
+        {"max_price": 14, "up_pct": 35, "down_abs": 1},
+        {"max_price": 200, "up_pct": 35, "down_pct": 7},
+        {"max_price": 5000, "up_pct": 25, "down_pct": 7},
+        {"max_price": null, "up_pct": 20, "down_pct": 7}
+      ]
+    }
+  ],
+  "fees": {
+    "buy_fee_pct": 0.15,
+    "sell_fee_pct": 0.25,
+    "note": "set these to your broker's fees"
+  },
+  "sources": {
+    "hours_and_tick_and_lot": {
+      "url": "https://www.idx.co.id/id/produk/mekanisme-dan-jam-perdagangan/",
+      "rule": "Peraturan II-A, Kep-00158/BEI/10-2026",
+      "checked": "2026-11-27"
+    },
+    "auto_rejection": {
+      "url": "https://www.idx.co.id/id/berita/siaran-pers/2735",
+      "rule": "Peraturan II-A, Kep-00158/BEI/10-2026",
+      "checked": "2026-11-27"
+    },
+    "holidays": {
+      "url": "https://www.idxcarbon.co.id/document/share/158/0a901391-a0ad-4ca5-930e-2788cb7eb27f",
+      "rule": "Peng-00171/BEI.POP/09-2025",
+      "checked": "2026-11-27"
+    },
+    "data_delay": {
+      "url": "https://help.yahoo.com/kb/exchanges-data-providers-yahoo-finance-sln2310.html",
+      "checked": "2026-11-27"
+    }
+  }
+}
