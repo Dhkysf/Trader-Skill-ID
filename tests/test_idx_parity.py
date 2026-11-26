@@ -309,7 +309,8 @@ class IdxScannerParityTest(unittest.TestCase):
         wl = os.path.join(self.tmp.name, "wl.json")
         code, text, err = _run_mod(scan, ["orb", "--config", self.cfg, "--offline", folder, "--now", "2026-11-23 10:15", "--out", wl])
         self.assertEqual(code, 0, err)
-        doc = json.load(open(wl, encoding="utf-8"))
+        with open(wl, encoding="utf-8") as fh:
+            doc = json.load(fh)
         self.assertEqual((doc["universe"], doc["scanned"], doc["failed"]), (3, 2, 1))
         self.assertEqual([h["symbol"] for h in doc["hits"]], ["BBCA", "BBRI"])
 
@@ -623,7 +624,8 @@ class IdxEntryParityTest(unittest.TestCase):
                                          "--now", "2026-11-23 09:35", "--write", out_e])
         self.assertEqual(code, 0)
         self.assertIn("TRIGGERED 9:35 AM", text)
-        e = json.load(open(out_e, encoding="utf-8"))
+        with open(out_e, encoding="utf-8") as fh:
+            e = json.load(fh)
         self.assertEqual((e["status"], e["market"], e["bar_index"], e["price"]), ("triggered", "idx", 6, 5550.0))
 
         code_w, j_w, _ = _run_mod(entry, ["check", "BBCA", "--config", self.cfg, "--offline", BBCA_5M,
@@ -970,14 +972,17 @@ class IdxTimeMachineParityTest(unittest.TestCase):
             cfg = os.path.join(d, "cfg.json")
             pl = os.path.join(d, "plan.json")
             out_p = os.path.join(d, "tm.json")
-            json.dump({"market": "idx"}, open(cfg, "w", encoding="utf-8"))
-            json.dump(self._plan(), open(pl, "w", encoding="utf-8"))
+            with open(cfg, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx"}, fh)
+            with open(pl, "w", encoding="utf-8") as fh:
+                json.dump(self._plan(), fh)
 
             c1, t1, e1 = _run_mod(tm, ["run", "--plan", pl, "--config", cfg, "--offline", BBCA_5M,
                                        "--now", "2026-11-26 16:00", "--replays", "200", "--write", out_p])
             self.assertEqual(c1, 0, e1)
             self.assertIn("/trader-budget", t1)
-            doc = json.load(open(out_p, encoding="utf-8"))
+            with open(out_p, encoding="utf-8") as fh:
+                doc = json.load(fh)
             self.assertEqual((doc["created_by"], doc["source"]), ("trader-timemachine", "offline"))
 
             c2, t2, _ = _run_mod(tm, ["run", "--plan", pl, "--config", cfg, "--offline", BBCA_5M,
@@ -1026,10 +1031,13 @@ class IdxBudgetParityTest(unittest.TestCase):
             cfg_p = os.path.join(d, "cfg.json")
             pp = os.path.join(d, "prices.json")
             pf = os.path.join(d, "pf.json")
-            json.dump(self.cfg, open(cfg_p, "w", encoding="utf-8"))
-            json.dump({"as_of": "2026-11-23T02:50:00Z", "prices": {"BBCA": 10050},
-                       "detail": {"BBCA": {"time": "2026-11-23T02:50:00Z"}}}, open(pp, "w", encoding="utf-8"))
-            json.dump({"cash": 2500000, "positions": []}, open(pf, "w", encoding="utf-8"))
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg, fh)
+            with open(pp, "w", encoding="utf-8") as fh:
+                json.dump({"as_of": "2026-11-23T02:50:00Z", "prices": {"BBCA": 10050},
+                           "detail": {"BBCA": {"time": "2026-11-23T02:50:00Z"}}}, fh)
+            with open(pf, "w", encoding="utf-8") as fh:
+                json.dump({"cash": 2500000, "positions": []}, fh)
             c1, out1, _ = _run_mod(size, ["--plan", BBCA_PLAN, "--config", cfg_p, "--portfolio", os.path.join(d, "none"),
                                           "--prices", pp, "--now", "2026-11-23 09:55", "--json"])
             self.assertEqual(c1, 1)
@@ -1069,20 +1077,24 @@ class IdxBudgetParityTest(unittest.TestCase):
         with self.assertRaises(size.SizeError):
             size.size(w, {"market": "idx", "budget": 10000000, "fractional": False})
 
-    @unittest.expectedFailure  # BUG: size.whole_shares ignores IDX 100-share lot size (skills/trader-budget/size.py:685-706)
     def test_weights_mode_whole_lots_on_idx(self):
         w = size.parse_weights({"BBCA": 50, "BBRI": 50})
         r = size.size(w, {"market": "idx", "budget": 10000000, "cash_buffer_pct": 10, "max_position_pct": 75,
                           "min_order": 100000, "fractional": False}, prices={"BBCA": 5875, "BBRI": 3080})
         for p in r["positions"]:
             self.assertEqual(p["shares"] % 100, 0, p)
+        txt = size.report(r, size.orders_from(r))
+        self.assertIn("7 lots (700 shares)", txt)
+        self.assertIn("15 lots (1500 shares)", txt)
 
     def test_weights_mode_cli(self):
         with tempfile.TemporaryDirectory() as d:
             c = os.path.join(d, "cfg.json")
             t = os.path.join(d, "targets.json")
-            json.dump({"market": "idx", "budget": 10000000, "fractional": True}, open(c, "w", encoding="utf-8"))
-            json.dump({"BBCA": 60, "BBRI": 40}, open(t, "w", encoding="utf-8"))
+            with open(c, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000, "fractional": True}, fh)
+            with open(t, "w", encoding="utf-8") as fh:
+                json.dump({"BBCA": 60, "BBRI": 40}, fh)
             code, out, err = _run_mod(size, ["--targets", t, "--config", c, "--json"])
             self.assertEqual(code, 0, err)
             self.assertEqual([o["symbol"] for o in json.loads(out)["orders"]], ["BBCA", "BBRI"])
@@ -1112,13 +1124,16 @@ class IdxRiskParityTest(unittest.TestCase):
             op = os.path.join(d, "orders.json")
             rp = os.path.join(d, "risk.json")
             none = os.path.join(d, "none")
-            json.dump(self.cfg, open(cp, "w", encoding="utf-8"))
-            json.dump({"orders": [self.order]}, open(op, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg, fh)
+            with open(op, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [self.order]}, fh)
             code, out, err = _run_mod(check, ["--orders", op, "--config", cp, "--portfolio", none,
                                               "--prices", none, "--state", none, "--now", "2026-11-23 10:15", "--out", rp])
             self.assertEqual(code, 0, err)
             self.assertIn("not financial advice", out)
-            self.assertEqual(json.load(open(rp, encoding="utf-8"))["results"][0]["fingerprint"], check.fingerprint(self.order))
+            with open(rp, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["results"][0]["fingerprint"], check.fingerprint(self.order))
 
     def test_stop_target_and_reward_risk_blocks(self):
         no_stop = dict(self.order)
@@ -1241,8 +1256,10 @@ class IdxBrokerParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cp, op, rp, sp = [os.path.join(d, f) for f in ("cfg.json", "orders.json", "risk.json", "state.json")]
             pf, none = os.path.join(d, "pf.json"), os.path.join(d, "none")
-            json.dump(self.cfg_dict, open(cp, "w", encoding="utf-8"))
-            json.dump({"orders": [self.order]}, open(op, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg_dict, fh)
+            with open(op, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [self.order]}, fh)
             common = ["--orders", op, "--config", cp, "--risk", rp, "--state", sp, "--now", "2026-11-23 10:15"]
             self.assertEqual(_run_mod(ticket, ["show"] + common)[0], 1)
             self.assertEqual(_run_mod(ticket, ["approve", "--index", "1", "--reply", "yes"] + common)[0], 1)
@@ -1269,8 +1286,10 @@ class IdxBrokerParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cp, op, rp, sp = [os.path.join(d, f) for f in ("cfg.json", "orders.json", "risk.json", "state.json")]
             pf, none = os.path.join(d, "pf.json"), os.path.join(d, "none")
-            json.dump(self.cfg_dict, open(cp, "w", encoding="utf-8"))
-            json.dump({"orders": [self.order]}, open(op, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg_dict, fh)
+            with open(op, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [self.order]}, fh)
             with redirect_stdout(io.StringIO()):
                 check.main(["--orders", op, "--config", cp, "--portfolio", pf, "--prices", none, "--state", sp,
                             "--now", "2026-11-23 10:15", "--out", rp])
@@ -1279,7 +1298,8 @@ class IdxBrokerParityTest(unittest.TestCase):
             self.assertEqual(_run_mod(ticket, ["approve", "--index", "1", "--reply", "yes"] + common)[0], 1)
             self.assertEqual(_run_mod(ticket, ["result", "--index", "1", "--status", "placed", "--filled-qty", "300",
                                                "--filled-price", "9875", "--portfolio", pf] + common)[0], 0)
-            st = json.load(open(sp, encoding="utf-8"))
+            with open(sp, encoding="utf-8") as fh:
+                st = json.load(fh)
             res = check.check([self.order], self.cfg_dict, state=st, now=check.parse_now("2026-11-23 10:30", p=self.idx))
             self.assertIn("already placed today", " ".join(res["results"][0]["reasons"]))
 
@@ -1287,10 +1307,12 @@ class IdxBrokerParityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cp, op, rp, sp = [os.path.join(d, f) for f in ("cfg.json", "orders.json", "risk.json", "state.json")]
             pf = os.path.join(d, "pf.json")
-            json.dump(self.cfg_dict, open(cp, "w", encoding="utf-8"))
-            json.dump({"cash": 7000000, "positions": [{"ticker": "BBCA", "shares": 300,
-                                                       "lots": [{"id": "BBCA-1", "date": "2026-11-23", "shares": 300, "cost": 2966944}]}]},
-                      open(pf, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg_dict, fh)
+            with open(pf, "w", encoding="utf-8") as fh:
+                json.dump({"cash": 7000000, "positions": [{"ticker": "BBCA", "shares": 300,
+                                                           "lots": [{"id": "BBCA-1", "date": "2026-11-23", "shares": 300, "cost": 2966944}]}]},
+                          fh)
             c, txt, err = _run_mod(ticket, ["flatten", "--symbol", "BBCA", "--orders", op, "--portfolio", pf,
                                             "--plan", BBCA_PLAN, "--config", cp, "--now", "2026-11-23 15:45"])
             self.assertEqual(c, 0, err)
@@ -1303,15 +1325,18 @@ class IdxBrokerParityTest(unittest.TestCase):
     def test_fill_sell_fifo_lot_relief_and_oversell(self):
         with tempfile.TemporaryDirectory() as d:
             cp, pf, sp = [os.path.join(d, f) for f in ("cfg.json", "pf.json", "state.json")]
-            json.dump(self.cfg_dict, open(cp, "w", encoding="utf-8"))
-            json.dump({"cash": 0, "positions": [{"ticker": "BBCA", "shares": 400, "lots": [
-                {"id": "BBCA-1", "date": "2026-11-18", "shares": 200, "cost": 1900000},
-                {"id": "BBCA-2", "date": "2026-11-20", "shares": 200, "cost": 2000000}]}]},
-                open(pf, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump(self.cfg_dict, fh)
+            with open(pf, "w", encoding="utf-8") as fh:
+                json.dump({"cash": 0, "positions": [{"ticker": "BBCA", "shares": 400, "lots": [
+                    {"id": "BBCA-1", "date": "2026-11-18", "shares": 200, "cost": 1900000},
+                    {"id": "BBCA-2", "date": "2026-11-20", "shares": 200, "cost": 2000000}]}]},
+                    fh)
             c, _, err = _run_mod(ticket, ["fill", "--symbol", "BBCA", "--side", "sell", "--qty", "300", "--price", "10000",
                                           "--date", "2026-11-23", "--portfolio", pf, "--config", cp, "--state", sp, "--now", "2026-11-23 10:15"])
             self.assertEqual(c, 0, err)
-            lots = json.load(open(pf, encoding="utf-8"))["positions"][0]["lots"]
+            with open(pf, encoding="utf-8") as fh:
+                lots = json.load(fh)["positions"][0]["lots"]
             self.assertEqual([l["id"] for l in lots], ["BBCA-2"])
             self.assertEqual(lots[0]["shares"], 100)
             self.assertEqual(_run_mod(ticket, ["fill", "--symbol", "BBCA", "--side", "sell", "--qty", "500", "--price", "10000",
@@ -1332,7 +1357,8 @@ class IdxAlertsParityTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             with gzip.open(BBCA_5M, "rt", encoding="utf-8") as fh:
-                open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8").write(fh.read())
+                with open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8") as out:
+                    out.write(fh.read())
             shutil.copy(BBRI_5M, os.path.join(d, "yahoo-BBRI.JK.json.gz"))
             q, errs = alerts.get_quotes(["BBCA", "BBRI", "ZZZZ"], "yahoo", d, p=self.idx)
             self.assertEqual(sorted(q), ["BBCA", "BBRI"])
@@ -1396,7 +1422,8 @@ class IdxAlertsParityTest(unittest.TestCase):
                                              q, st, {}, now, p=self.idx)[0]), 1)
 
     def test_plan_rules_flat_by_and_bad_rules(self):
-        plan = json.load(open(BBCA_PLAN, encoding="utf-8"))
+        with open(BBCA_PLAN, encoding="utf-8") as fh:
+            plan = json.load(fh)
         rules = alerts.rules_from_plan(plan, p=self.idx)
         self.assertEqual([r["type"] for r in rules], ["stop", "target", "time"])
         q = {"BBCA": {"symbol": "BBCA", "price": 9650.0}}
@@ -1410,9 +1437,11 @@ class IdxAlertsParityTest(unittest.TestCase):
     def test_cli_plan_add_list_reset_and_check(self):
         with tempfile.TemporaryDirectory() as d:
             cp, rp, sp, pp = [os.path.join(d, f) for f in ("cfg.json", "rules.json", "state.json", "prices.json")]
-            json.dump({"market": "idx"}, open(cp, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx"}, fh)
             with gzip.open(BBCA_5M, "rt", encoding="utf-8") as fh:
-                open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8").write(fh.read())
+                with open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8") as out:
+                    out.write(fh.read())
             self.assertEqual(_run_mod(alerts, ["add", "--from-plan", "--plan", BBCA_PLAN, "--rules", rp, "--state", sp, "--config", cp])[0], 0)
             self.assertEqual(_run_mod(alerts, ["add", "--rules", rp, "--opening-bell"])[0], 0)
             self.assertEqual(_run_mod(alerts, ["add", "--rules", rp, "--opening-bell"])[0], 1)
@@ -1425,14 +1454,18 @@ class IdxAlertsParityTest(unittest.TestCase):
     def test_cli_add_quote_clock_and_no_rules(self):
         with tempfile.TemporaryDirectory() as d:
             cp, rp, pp = [os.path.join(d, f) for f in ("cfg.json", "rules.json", "prices.json")]
-            json.dump({"market": "idx"}, open(cp, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx"}, fh)
             with gzip.open(BBCA_5M, "rt", encoding="utf-8") as fh:
-                open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8").write(fh.read())
+                with open(os.path.join(d, "yahoo-BBCA.JK.json"), "w", encoding="utf-8") as out:
+                    out.write(fh.read())
             with gzip.open(BBRI_5M, "rt", encoding="utf-8") as fh:
-                open(os.path.join(d, "yahoo-BBRI.JK.json"), "w", encoding="utf-8").write(fh.read())
+                with open(os.path.join(d, "yahoo-BBRI.JK.json"), "w", encoding="utf-8") as out:
+                    out.write(fh.read())
             self.assertEqual(_run_mod(alerts, ["quote", "BBCA", "--config", cp, "--offline", d, "--write", pp, "--now", "2026-11-26 16:15"])[0], 0)
             self.assertEqual(_run_mod(alerts, ["quote", "BBRI", "--config", cp, "--offline", d, "--write", pp])[0], 0)
-            self.assertEqual(sorted(json.load(open(pp, encoding="utf-8"))["prices"]), ["BBCA", "BBRI"])
+            with open(pp, encoding="utf-8") as fh:
+                self.assertEqual(sorted(json.load(fh)["prices"]), ["BBCA", "BBRI"])
             self.assertEqual(_run_mod(alerts, ["clock", "--config", cp, "--now", "2026-11-23 10:15"])[0], 0)
             self.assertEqual(_run_mod(alerts, ["clock", "--config", cp, "--now", "2026-08-17 10:15"])[0], 1)
             self.assertEqual(_run_mod(alerts, ["check", "--rules", rp, "--offline", d])[0], 1)
@@ -1463,10 +1496,12 @@ class IdxNewsParityTest(unittest.TestCase):
     def test_cli_once_newest_first_watchlist_errors_and_state(self):
         with tempfile.TemporaryDirectory() as d:
             cp, sp, wl, pl = [os.path.join(d, f) for f in ("cfg.json", "state.json", "wl.json", "plan.json")]
-            json.dump({"news_feeds": [{"label": "CNBC Indonesia Market", "url": "https://www.cnbcindonesia.com/market/rss"}]},
-                      open(cp, "w", encoding="utf-8"))
-            json.dump({"created_by": "trader-scanner", "hits": [{"symbol": "BBCA"}]}, open(wl, "w", encoding="utf-8"))
-            json.dump({"created_by": "trader-exit", "symbol": "TLKM"}, open(pl, "w", encoding="utf-8"))
+            with open(cp, "w", encoding="utf-8") as fh:
+                json.dump({"news_feeds": [{"label": "CNBC Indonesia Market", "url": "https://www.cnbcindonesia.com/market/rss"}]}, fh)
+            with open(wl, "w", encoding="utf-8") as fh:
+                json.dump({"created_by": "trader-scanner", "hits": [{"symbol": "BBCA"}]}, fh)
+            with open(pl, "w", encoding="utf-8") as fh:
+                json.dump({"created_by": "trader-exit", "symbol": "TLKM"}, fh)
             self.assertEqual(sorted(news.watch_from_files("/nonexistent.json", wl, pl)), ["BBCA", "TLKM"])
 
             base = ["--config", cp, "--offline", IDX_FIX, "--state", sp, "--hours", "72",
@@ -1535,7 +1570,8 @@ class IdxCoreParityTest(unittest.TestCase):
         for base, _, files in os.walk(os.path.join(ROOT, "skills")):
             for f in files:
                 if f.endswith(".py"):
-                    src = open(os.path.join(base, f), encoding="utf-8").read()
+                    with open(os.path.join(base, f), encoding="utf-8") as fh:
+                        src = fh.read()
                     if "def eastern_offset(" in src:
                         self.assertIn("market.utc_offset(", src)
                         self.assertNotIn("def _nth_sunday(", src)
@@ -1546,7 +1582,8 @@ class IdxCoreParityTest(unittest.TestCase):
         self.assertEqual(merged["max_loss_per_trade"], 40000)
         self.assertNotIn("max_loss_per_trade_usd", merged)
         self.assertEqual(len(notices), 1)
-        plan = json.load(open(BBCA_PLAN, encoding="utf-8"))
+        with open(BBCA_PLAN, encoding="utf-8") as fh:
+            plan = json.load(fh)
         s = size.size_trade(plan, {"market": "idx", "budget": 10000000, "max_loss_per_trade": 40000, "max_loss_per_trade_usd": 80000},
                             today="2026-11-23")
         self.assertEqual(s["lots"], 1)

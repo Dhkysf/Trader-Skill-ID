@@ -682,33 +682,39 @@ def round_to_unit(exact, capped, order, cap, unit):
     return {t: round(u * unit, 2) for t, u in out.items()}
 
 
-def whole_shares(dollars, prices, order, cap, cash):
-    """Whole shares: floor each slice, then buy one more share at a time for the
-    stock furthest below its slice while cash lasts and the cap holds."""
+def whole_shares(dollars, prices, order, cap, cash, lot=1):
+    """Whole shares (or whole lots when lot > 1): floor each slice, then buy one
+    more unit at a time for the stock furthest below its slice while cash lasts
+    and the cap holds."""
+    lot = max(1, int(lot))
     shares = {}
     for t in order:
-        shares[t] = int(math.floor(dollars[t] / prices[t] + EPS)) if dollars[t] > 0 else 0
+        lp = prices[t] * lot
+        shares[t] = (int(math.floor(dollars[t] / lp + EPS)) * lot) if (dollars[t] > 0 and lp > 0) else 0
     spent = sum(shares[t] * prices[t] for t in order)
     left = cash - spent
     while True:
         best, gap = None, None
         for t in order:
             p = prices[t]
-            if p > left + EPS or (shares[t] + 1) * p > cap + EPS:
+            lp = p * lot
+            if lp <= 0 or lp > left + EPS or (shares[t] + lot) * p > cap + EPS:
                 continue
             g = dollars[t] - shares[t] * p
             if best is None or g > gap + EPS:
                 best, gap = t, g
         if best is None:
             break
-        shares[best] += 1
-        left -= prices[best]
+        shares[best] += lot
+        left -= prices[best] * lot
     return shares
 
 
 def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None):
     """Weights mode. Pure function: weights + rules -> the full sizing result (a dict)."""
     c, cfg_notices = market.merge_config(cfg)
+    prof = market.from_config(c)
+    lot = int(prof.get("lot", 1))
     budget = float(budget if budget is not None else (c.get("budget") or 0))
     if budget <= 0:
         raise SizeError("no budget: pass --budget or set \"budget\" in trader/config.json")
@@ -749,15 +755,19 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
         dollars = round_to_unit(exact, capped, order, cap, unit)
         shares = None
         if whole:
-            shares = whole_shares(dollars, prices, order, cap, sum(dollars.values()))
+            shares = whole_shares(dollars, prices, order, cap, sum(dollars.values()), lot=lot)
             dollars = {t: round(shares[t] * prices[t], 2) for t in order}
         small = [r for r in live if dollars[r["ticker"]] < min_order - EPS]
         if not small:
             break
         worst = min(small, key=lambda r: (r["source_weight"], r["ticker"]))
         if whole and shares is not None and shares[worst["ticker"]] == 0 and prices.get(worst["ticker"], 0) > 0:
-            reason = ("one share costs $%s, more than its slice; it cannot be bought in whole shares"
-                      % _num(prices[worst["ticker"]]))
+            if lot > 1:
+                reason = ("one lot (%d shares) costs %s, more than its slice; it cannot be bought in whole lots"
+                          % (lot, money(prices[worst["ticker"]] * lot, prof)))
+            else:
+                reason = ("one share costs $%s, more than its slice; it cannot be bought in whole shares"
+                          % _num(prices[worst["ticker"]]))
         else:
             reason = "its slice ($%s) is under your $%s minimum order" % (
                 _num(dollars[worst["ticker"]]), _num(min_order))
@@ -778,6 +788,7 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
         positions.append(p)
     invested = round(sum(p["dollars"] for p in positions), 2)
     return {
+        "market": prof["id"],
         "budget": budget, "cash_buffer_pct": buf_pct, "cash_buffer": cash_buffer,
         "investable": investable, "max_position_pct": cap_pct, "cap": cap,
         "min_order_usd": min_order, "whole_shares": bool(whole),
@@ -789,6 +800,8 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
 
 def orders_from(result, source=""):
     """Weights mode: proposed buy orders, one per position, in place_stock_order shape."""
+    is_us = result.get("market") in (None, "us")
+    prof = _US if is_us else market.load(result["market"])
     out = []
     for p in result["positions"]:
         if p["dollars"] <= 0:
@@ -797,7 +810,7 @@ def orders_from(result, source=""):
         if source:
             why = "%s, weights from %s" % (why, source)
         if p["capped"]:
-            why += "; capped at %s%% of the %s budget" % (_num(result["max_position_pct"]), money(result["budget"]))
+            why += "; capped at %s%% of the %s budget" % (_num(result["max_position_pct"]), money(result["budget"], prof))
         o = {"symbol": p["ticker"], "side": "buy"}
         if result["whole_shares"]:
             o["qty"] = str(int(p["shares"]))
@@ -811,39 +824,50 @@ def orders_from(result, source=""):
 def report(result, orders, source=""):
     """Weights mode table."""
     r = result
+    is_us = r.get("market") in (None, "us")
+    prof = _US if is_us else market.load(r["market"])
+    lot = int(prof.get("lot", 1))
     lines = []
     if source:
         lines.append("Weights from: %s" % source)
     lines.append("Budget %s, cash buffer %s%% = %s, investing %s, cap %s%% = %s per stock"
-                 % (money(r["budget"]), _num(r["cash_buffer_pct"]), money(r["cash_buffer"]),
-                    money(r["investable"]), _num(r["max_position_pct"]), money(r["cap"])))
+                 % (money(r["budget"], prof), _num(r["cash_buffer_pct"]), money(r["cash_buffer"], prof),
+                    money(r["investable"], prof), _num(r["max_position_pct"]), money(r["cap"], prof)))
     lines.append("")
-    has_price = any("price" in p for p in r["positions"])
+    has_price = any("price" in pos for pos in r["positions"])
     head = "%-7s %-22s %8s %11s" % ("ticker", "name", "weight", "dollars")
     if has_price:
         head += " %10s %10s" % ("price", "shares")
     lines.append(head + "  note")
-    for p in r["positions"]:
-        row = "%-7s %-22s %7.2f%% %11s" % (p["ticker"], (p["name"] or "")[:22], p["weight"], money(p["dollars"]))
+    for pos in r["positions"]:
+        row = "%-7s %-22s %7.2f%% %11s" % (pos["ticker"], (pos["name"] or "")[:22], pos["weight"], money(pos["dollars"], prof))
         if has_price:
-            row += " %10s %10s" % (money(p["price"]) if "price" in p else "", p.get("shares", ""))
-        if p["capped"]:
+            if lot > 1 and r.get("whole_shares") and "shares" in pos:
+                qty_str = "%d lots (%d shares)" % (int(pos["shares"]) // lot, int(pos["shares"]))
+            else:
+                qty_str = pos.get("shares", "")
+            row += " %10s %10s" % (money(pos["price"], prof) if "price" in pos else "", qty_str)
+        if pos["capped"]:
             row += "  capped at %s%%" % _num(r["max_position_pct"])
         lines.append(row)
-    lines.append("%-7s %-22s %8s %11s" % ("", "invested", "", money(r["invested"])))
-    lines.append("%-7s %-22s %8s %11s" % ("", "cash buffer", "", money(r["cash_buffer"])))
-    lines.append("%-7s %-22s %8s %11s" % ("", "left idle", "", money(r["idle"])))
+    lines.append("%-7s %-22s %8s %11s" % ("", "invested", "", money(r["invested"], prof)))
+    lines.append("%-7s %-22s %8s %11s" % ("", "cash buffer", "", money(r["cash_buffer"], prof)))
+    lines.append("%-7s %-22s %8s %11s" % ("", "left idle", "", money(r["idle"], prof)))
     if r["idle"] >= 1:
         lines.append("")
-        lines.append("Left idle %s: %s" % (money(r["idle"]), (
-            "whole shares do not divide evenly" if r["whole_shares"]
-            else "every stock is at its cap; add stocks or raise max_position_pct")))
+        idle_why = ("whole lots do not divide evenly" if lot > 1 else "whole shares do not divide evenly") if r["whole_shares"] else "every stock is at its cap; add stocks or raise max_position_pct"
+        lines.append("Left idle %s: %s" % (money(r["idle"], prof), idle_why))
     for d in r["dropped"]:
         lines.append("Dropped %s: %s" % (d["ticker"], d["reason"]))
     lines.append("")
     lines.append("Proposed orders (place_stock_order arguments, nothing has been placed):")
     for o in orders:
-        amount = ("notional \"%s\"" % o["notional"]) if "notional" in o else ("qty \"%s\"" % o["qty"])
+        if "notional" in o:
+            amount = "notional \"%s\"" % o["notional"]
+        elif lot > 1:
+            amount = "%d lots (%d shares)" % (int(o["qty"]) // lot, int(o["qty"]))
+        else:
+            amount = "qty \"%s\"" % o["qty"]
         lines.append("  %s %s %s, %s, %s" % (o["side"], o["symbol"], amount, o["type"], o["time_in_force"]))
     lines.append("")
     lines.append("These buys have no stop. trader-risk blocks them while \"require_stop\" is true and applies "
