@@ -36,19 +36,20 @@ def every_text_file():
 
 
 class Repo(unittest.TestCase):
-    def test_eleven_skill_folders_at_the_root(self):
-        found = sorted(d for d in os.listdir(ROOT)
-                       if os.path.isfile(os.path.join(ROOT, d, "SKILL.md")))
+    def test_eleven_skill_folders_under_skills(self):
+        skills_dir = os.path.join(ROOT, "skills")
+        found = sorted(d for d in os.listdir(skills_dir)
+                       if os.path.isfile(os.path.join(skills_dir, d, "SKILL.md")))
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in IGNORED_ROOT)
         self.assertEqual(root, sorted([".claude-plugin", "AGENTS.md", "LICENSE", "README.md",
-                                       "check.bat", "tests"] + SKILLS))
+                                       "check.bat", "skills", "tests"]))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
-            fm, text = frontmatter(os.path.join(ROOT, s, "SKILL.md"))
+            fm, text = frontmatter(os.path.join(ROOT, "skills", s, "SKILL.md"))
             self.assertIn("name: %s\n" % s, fm + "\n", s)
             self.assertRegex(fm, r"description: ", s)
             self.assertGreater(len(fm), 200, "%s description is too thin" % s)
@@ -56,7 +57,7 @@ class Repo(unittest.TestCase):
 
     def test_order_path_skills_carry_the_safety_rule(self):
         for s in ORDER_PATH:
-            _, text = frontmatter(os.path.join(ROOT, s, "SKILL.md"))
+            _, text = frontmatter(os.path.join(ROOT, "skills", s, "SKILL.md"))
             low = " ".join(text.lower().split())
             self.assertIn("not financial advice", low, s)
             self.assertIn("yes", low, s)
@@ -109,7 +110,7 @@ class Repo(unittest.TestCase):
     def test_every_tool_runs_on_python_3_8(self):
         # no 3.9+ only modules or syntax in the tools (the README promises 3.8)
         for s in SKILLS:
-            folder = os.path.join(ROOT, s)
+            folder = os.path.join(ROOT, "skills", s)
             for f in os.listdir(folder):
                 if not f.endswith(".py"):
                     continue
@@ -125,7 +126,7 @@ class Repo(unittest.TestCase):
                         self.assertNotIn(bad, src, "%s/%s" % (s, f))
 
     def test_day_trading_limits_ship_in_the_example_config(self):
-        with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
+        with open(os.path.join(ROOT, "skills", "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
         for k in ("max_loss_per_trade_usd", "max_daily_loss_usd", "max_trades_per_day",
                   "min_reward_risk", "require_stop", "no_entries_after", "flat_by"):
@@ -135,7 +136,7 @@ class Repo(unittest.TestCase):
         self.assertIs(cfg.get("allow_margin", False), False)
 
     def test_paper_trading_is_the_default(self):
-        with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
+        with open(os.path.join(ROOT, "skills", "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
         self.assertIs(cfg["paper"], True)
         self.assertIs(cfg.get("allow_options", False), False)

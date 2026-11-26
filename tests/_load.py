@@ -8,7 +8,7 @@ FIX = os.path.join(ROOT, "tests", "fixtures")
 
 
 def load(folder, name):
-    path = os.path.join(ROOT, folder, name + ".py")
+    path = os.path.join(ROOT, "skills", folder, name + ".py")
     spec = importlib.util.spec_from_file_location("trader_" + name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
