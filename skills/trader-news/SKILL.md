@@ -21,12 +21,12 @@ feeds that carry those first, for every stock on the watchlist, and tells you
 only what is new. It also prints how far each stock has moved today, so a
 headline and a move sit side by side.
 
-Tool in this folder (standard library Python, no keys):
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-news` in this repo, `.agents/skills/trader-news` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/news.py"                         # watchlist + plan + portfolio
-python3 "${CLAUDE_SKILL_DIR}/news.py" --tickers TSLA NVDA --hours 12
-python3 "${CLAUDE_SKILL_DIR}/news.py" --no-sec --json
+python "<skill-dir>/news.py"                         # watchlist + plan + portfolio
+python "<skill-dir>/news.py" --tickers TSLA NVDA --hours 12
+python "<skill-dir>/news.py" --no-sec --json
 ```
 
 ## What it reads and writes
@@ -61,7 +61,7 @@ python3 "${CLAUDE_SKILL_DIR}/news.py" --no-sec --json
 
 ## Steps
 
-1. Run the check: `python3 "${CLAUDE_SKILL_DIR}/news.py"`. Exit code 1 means
+1. Run the check: `python "<skill-dir>/news.py"`. Exit code 1 means
    nothing new. `--all` shows items already seen, `--json` gives everything
    machine readable, `--dry-run` leaves the state alone.
 2. Read the items that matter: every `!` filing, anything tagged earnings,

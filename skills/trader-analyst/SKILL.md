@@ -22,10 +22,10 @@ the company actually filed with the SEC, lines them up quarter by quarter, and
 says plainly what changed. For a day trader it answers two questions before a
 trade: what did the last report say, and is the next one inside this trade?
 
-Tool in this folder (standard library Python, no keys):
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-analyst` in this repo, `.agents/skills/trader-analyst` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/facts.py" --help
+python "<skill-dir>/facts.py" --help
 ```
 
 It needs the SEC User-Agent (`sec_user_agent` in `trader/config.json`, or
@@ -74,8 +74,8 @@ email. It refuses to call SEC without one.
    `trader/watchlist.json`):
 
    ```bash
-   python3 "${CLAUDE_SKILL_DIR}/facts.py" TSLA
-   python3 "${CLAUDE_SKILL_DIR}/facts.py" TSLA NVDA AMD --metrics trader/metrics.json
+   python "<skill-dir>/facts.py" TSLA
+   python "<skill-dir>/facts.py" TSLA NVDA AMD --metrics trader/metrics.json
    ```
 
    `--quarters 8` shows two years, `--json` everything machine-readable,

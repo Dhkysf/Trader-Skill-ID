@@ -24,14 +24,14 @@ proposal only. trader-risk checks it and trader-broker asks the user yes or
 no. Day trading loses most people money. Sizing to a max loss keeps each
 loss small; it does not make a trade win.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-budget` in this repo, `.agents/skills/trader-budget` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/size.py"                        # trader/plan.json + trader/config.json
-python3 "${CLAUDE_SKILL_DIR}/size.py" --write                # write trader/orders.json
-python3 "${CLAUDE_SKILL_DIR}/size.py" --limit --write        # a limit order at the plan's entry
-python3 "${CLAUDE_SKILL_DIR}/size.py" --limit 364.00 --json  # a limit order at 364.00
-python3 "${CLAUDE_SKILL_DIR}/size.py" --weights AAPL=40,KO=60 --config split.json   # weights mode, below
+python "<skill-dir>/size.py"                        # trader/plan.json + trader/config.json
+python "<skill-dir>/size.py" --write                # write trader/orders.json
+python "<skill-dir>/size.py" --limit --write        # a limit order at the plan's entry
+python "<skill-dir>/size.py" --limit 364.00 --json  # a limit order at 364.00
+python "<skill-dir>/size.py" --weights AAPL=40,KO=60 --config split.json   # weights mode, below
 ```
 
 `--now "2026-10-19 10:15"` pins the clock (New York time). A plan for
@@ -66,7 +66,7 @@ If `trader/config.json` does not exist, copy `config.example.json` into
 ## Step 2: size the trade
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/size.py" --write
+python "<skill-dir>/size.py" --write
 ```
 
 Whole shares only: Alpaca takes no fractions in a bracket order. The size is
@@ -160,7 +160,7 @@ margin or short positions.
 - Paper trading by default (`"paper": true`). Going live is the user's own decision, in their own config.
 - Nothing in this pack places an order except trader-broker, and only when all three hold: trader-risk
   passed that exact order today, the user typed an explicit yes for that one order in the chat, and the
-  user clicked Allow once on Claude's own card because the order tool is set to "Needs approval"
-  (Customize > Connectors > tool permissions). Never set an order tool to "Always allow".
+  user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
+  permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or the Claude Desktop config, never in the chat.
+- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.

@@ -18,7 +18,24 @@ an order on its own. Paper trading is the default.
 
 ## Install
 
-Coming in v0.1.0 (Antigravity).
+**(a) Recommended: a dedicated trading folder (Antigravity IDE)**
+
+The skills write working files (`watchlist.json`, `plan.json`, `orders.json`, `state/`) into `trader\` inside your current folder. Using a dedicated folder keeps trading state out of your code repos.
+
+In PowerShell, copy the skills into your trading folder's `.agents\skills\` directory:
+
+```powershell
+New-Item -ItemType Directory -Force -Path "E:\Projects\Trading-Lab\.agents\skills"
+Copy-Item -Recurse -Force ".\skills\trader-*" "E:\Projects\Trading-Lab\.agents\skills\"
+```
+
+(Use any dedicated folder path you prefer.) Open that folder in Google Antigravity, start a new chat, and run `/trader-news TSLA`.
+
+**(b) Antigravity CLI (`agy`)**
+
+```powershell
+agy plugin install https://github.com/Dhkysf/Trader-Skill-ID
+```
 
 The tools need Python 3.8 or newer. Nothing to pip install. The SEC tools
 (news filings, the analyst) ask you to identify yourself: put your name and
@@ -82,37 +99,39 @@ An example, the trade in the reel: Tesla, Monday October 19 2026, real data.
    loss limit, trades per day, reward to risk, the entry window, position
    size and cash. PASS or BLOCK, with the reason.
 8. **`/trader-broker`** shows you the ticket in plain words. You type yes for
-   that exact order. Claude calls your brokerage connector (Alpaca's MCP
-   server, paper account by default), and Claude's own "Allow once / Deny"
-   card asks you one more time.
+   that exact order. The agent calls your brokerage connector (Alpaca's MCP
+   server, paper account by default), and the agent's own permission prompt
+   asks you one more time.
 9. **`/trader-alerts`** rings on the stop, the target and at 3:55 PM to
    flatten whatever is still open.
 
 ## The tools
 
 All standard-library Python. The data tools read public endpoints and are
-polite about it.
+polite about it. Commands below use `python` on Windows (use `python3` and `/`
+on macOS/Linux):
 
-```bash
-python3 trader-scanner/scan.py universe                                # ~5,900 US stocks, Nasdaq Trader
-python3 trader-scanner/scan.py daily                                   # pre-market setups, whole universe
-python3 trader-scanner/scan.py orb --at 10:15                          # opening-range breakouts so far
-python3 trader-news/news.py --tickers TSLA --hours 12                  # headlines, 8-Ks, today's move
-python3 trader-entry/entry.py check TSLA --setup orb                   # waiting / triggered / expired
-python3 trader-entry/entry.py watch TSLA --every 30                    # bar by bar until it triggers
-python3 trader-exit/exit.py plan --stop or-mid --target 1R --write     # -> trader/plan.json
-python3 trader-timemachine/timemachine.py run --write                  # 10,000 replays + the history
-python3 trader-budget/size.py --write                                  # -> trader/orders.json
-python3 trader-risk/check.py                                           # PASS / BLOCK per order
-python3 trader-broker/ticket.py show                                   # the tickets, READY or not
-python3 trader-alerts/alerts.py add --from-plan                        # stop, target, flat by close
-python3 trader-alerts/alerts.py check                                  # rings what hit, once
-python3 trader-analyst/facts.py TSLA                                   # quarters, growth, EPS
-python3 trader-pelosi/ptr.py index --member pelosi                     # her PTRs this year
+```powershell
+python skills\trader-scanner\scan.py universe                                # ~5,900 US stocks, Nasdaq Trader
+python skills\trader-scanner\scan.py daily                                   # pre-market setups, whole universe
+python skills\trader-scanner\scan.py orb --at 10:15                          # opening-range breakouts so far
+python skills\trader-news\news.py --tickers TSLA --hours 12                  # headlines, 8-Ks, today's move
+python skills\trader-entry\entry.py check TSLA --setup orb                   # waiting / triggered / expired
+python skills\trader-entry\entry.py watch TSLA --every 30                    # bar by bar until it triggers
+python skills\trader-exit\exit.py plan --stop or-mid --target 1R --write     # -> trader/plan.json
+python skills\trader-timemachine\timemachine.py run --write                  # 10,000 replays + the history
+python skills\trader-budget\size.py --write                                  # -> trader/orders.json
+python skills\trader-risk\check.py                                           # PASS / BLOCK per order
+python skills\trader-broker\ticket.py show                                   # the tickets, READY or not
+python skills\trader-alerts\alerts.py add --from-plan                        # stop, target, flat by close
+python skills\trader-alerts\alerts.py check                                  # rings what hit, once
+python skills\trader-analyst\facts.py TSLA                                   # quarters, growth, EPS
+python skills\trader-pelosi\ptr.py index --member pelosi                     # her PTRs this year
 ```
 
-```bash
-python3 -m unittest discover -s tests -v
+```powershell
+.\check.bat nopause
+python -m unittest discover -s tests -v
 ```
 
 The tests run offline, on fixtures cut from real data: TSLA's 5-minute bars
@@ -129,9 +148,9 @@ yourself, and talk to a licensed professional if you need advice.
 
 **No trade goes through until you say yes.** Only `/trader-broker` can lead to
 an order, and only after `/trader-risk` passes that exact order and you type
-yes for it in the chat. Set your brokerage tool to "Needs approval" in Claude
-(Customize, Connectors, tool permissions), never "Always allow", so Claude's
-own "Allow once / Deny" card is a second check. No options, margin, short
+yes for it in the chat. Set your brokerage order tool to `ask` in Antigravity
+permissions, never `allow`, so the agent's own permission prompt is a second
+check. Never use Turbo mode in a trading workspace. No options, margin, short
 selling or leverage unless you turn them on.
 
 **Paper first.** `"paper": true` is the default in `config.example.json`, and
@@ -167,18 +186,20 @@ wash sales likely. Nothing here is tax advice.
 ## Files
 
 ```
-trader-scanner/     SKILL.md, scan.py
-trader-news/        SKILL.md, news.py
-trader-entry/       SKILL.md, entry.py
-trader-exit/        SKILL.md, exit.py
-trader-timemachine/ SKILL.md, timemachine.py
-trader-risk/        SKILL.md, check.py
-trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
-trader-broker/      SKILL.md, ticket.py, claude_desktop_config.example.json
-trader-alerts/      SKILL.md, alerts.py, alerts.example.json
-trader-analyst/     SKILL.md, facts.py, metrics.example.json
-trader-pelosi/      SKILL.md, ptr.py
-tests/              unittest suite + offline fixtures
+.antigravity-plugin/plugin.json
+skills/
+  trader-scanner/     SKILL.md, scan.py
+  trader-news/        SKILL.md, news.py
+  trader-entry/       SKILL.md, entry.py
+  trader-exit/        SKILL.md, exit.py
+  trader-timemachine/ SKILL.md, timemachine.py
+  trader-risk/        SKILL.md, check.py
+  trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
+  trader-broker/      SKILL.md, ticket.py, mcp_config.example.json
+  trader-alerts/      SKILL.md, alerts.py, alerts.example.json
+  trader-analyst/     SKILL.md, facts.py, metrics.example.json
+  trader-pelosi/      SKILL.md, ptr.py
+tests/                unittest suite + offline fixtures
 ```
 
 ## Credits

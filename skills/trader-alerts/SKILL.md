@@ -24,21 +24,21 @@ nothing is sold by this skill. With a bracket order the stop-loss and the
 take-profit already sit at the broker and do the work; the alerts tell the
 user what happened and when it is time to be flat.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-alerts` in this repo, `.agents/skills/trader-alerts` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" clock                          # NYSE open or closed, next open
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --from-plan                # stop, target, flat by close from trader/plan.json
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --opening-bell
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --symbol TSLA --stop 358.32
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --symbol TSLA --target 370.04
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --at 15:55 --label "flat by close" --before-close
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" add --symbol KO --pct 3
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" check                          # exit 0 = something rang
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" quote TSLA --write             # -> trader/prices.json
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" quote --holdings --write       # portfolio + plan tickers
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" list
-python3 "${CLAUDE_SKILL_DIR}/alerts.py" reset tsla-plan-stop
+python "<skill-dir>/alerts.py" clock                          # NYSE open or closed, next open
+python "<skill-dir>/alerts.py" add --from-plan                # stop, target, flat by close from trader/plan.json
+python "<skill-dir>/alerts.py" add --opening-bell
+python "<skill-dir>/alerts.py" add --symbol TSLA --stop 358.32
+python "<skill-dir>/alerts.py" add --symbol TSLA --target 370.04
+python "<skill-dir>/alerts.py" add --at 15:55 --label "flat by close" --before-close
+python "<skill-dir>/alerts.py" add --symbol KO --pct 3
+python "<skill-dir>/alerts.py" check                          # exit 0 = something rang
+python "<skill-dir>/alerts.py" quote TSLA --write             # -> trader/prices.json
+python "<skill-dir>/alerts.py" quote --holdings --write       # portfolio + plan tickers
+python "<skill-dir>/alerts.py" list
+python "<skill-dir>/alerts.py" reset tsla-plan-stop
 ```
 
 `--now "2026-10-19 15:55"` pins the clock (New York time); `--offline DIR`
@@ -105,7 +105,7 @@ holiday list is unknown.
 
 1. Right after trader-exit writes the plan, run `add --from-plan`. Confirm
    the three alerts back to the user: the stop, the target and the flat-by time.
-2. Run `check` while the trade is open: every few minutes from a Claude
+2. Run `check` while the trade is open: every few minutes from a
    scheduled task or `/loop`. Each run fetches only the tickers in today's
    rules and rings each alert once. A check reads the latest delayed quote;
    it is not a live feed, and a price can pass a level between two checks.
@@ -154,7 +154,7 @@ live, and never predicts where a price is going.
 - Paper trading by default (`"paper": true`). Going live is the user's own decision, in their own config.
 - Nothing in this pack places an order except trader-broker, and only when all three hold: trader-risk
   passed that exact order today, the user typed an explicit yes for that one order in the chat, and the
-  user clicked Allow once on Claude's own card because the order tool is set to "Needs approval"
-  (Customize > Connectors > tool permissions). Never set an order tool to "Always allow".
+  user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
+  permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or the Claude Desktop config, never in the chat.
+- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.

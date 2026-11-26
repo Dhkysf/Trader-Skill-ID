@@ -26,13 +26,13 @@ BLOCK is final for that order: it does not go to the user for a yes, and it
 does not go to the broker. Most people who day trade lose money. These limits
 keep each loss and each day's losses small. They do not make a trade win.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-risk` in this repo, `.agents/skills/trader-risk` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/check.py"                           # trader/ files; writes trader/state/risk.json
-python3 "${CLAUDE_SKILL_DIR}/check.py" --json
-python3 "${CLAUDE_SKILL_DIR}/check.py" --no-write                # look without recording
-python3 "${CLAUDE_SKILL_DIR}/check.py" --now "2026-10-19 10:15"  # pin the clock (New York time)
+python "<skill-dir>/check.py"                           # trader/ files; writes trader/state/risk.json
+python "<skill-dir>/check.py" --json
+python "<skill-dir>/check.py" --no-write                # look without recording
+python "<skill-dir>/check.py" --now "2026-10-19 10:15"  # pin the clock (New York time)
 ```
 
 ## What it reads and writes
@@ -166,7 +166,7 @@ treats a PASS as the user's yes.
 - Paper trading by default (`"paper": true`). Going live is the user's own decision, in their own config.
 - Nothing in this pack places an order except trader-broker, and only when all three hold: trader-risk
   passed that exact order today, the user typed an explicit yes for that one order in the chat, and the
-  user clicked Allow once on Claude's own card because the order tool is set to "Needs approval"
-  (Customize > Connectors > tool permissions). Never set an order tool to "Always allow".
+  user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
+  permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or the Claude Desktop config, never in the chat.
+- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.

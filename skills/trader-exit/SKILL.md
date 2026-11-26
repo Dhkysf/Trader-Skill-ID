@@ -24,14 +24,14 @@ anything in the middle of a fast move. A stop is a plan, not a guarantee: a
 gap or a fast market can fill past it. Day trading loses most people money,
 and a neat plan does not change that.
 
-`${CLAUDE_SKILL_DIR}` below is this skill's folder (where this SKILL.md lives).
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-exit` in this repo, `.agents/skills/trader-exit` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/exit.py" plan                          # trader/entry.json: midpoint stop, 2R target
-python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --stop or-mid --target 1R --write
-python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --stop atr:1.5           # needs the session's bars (Yahoo or --offline)
-python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --symbol TSLA --entry 364.18 --or-high 362.18 --or-low 354.47
-python3 "${CLAUDE_SKILL_DIR}/exit.py" show                          # the current trader/plan.json
+python "<skill-dir>/exit.py" plan                          # trader/entry.json: midpoint stop, 2R target
+python "<skill-dir>/exit.py" plan --stop or-mid --target 1R --write
+python "<skill-dir>/exit.py" plan --stop atr:1.5           # needs the session's bars (Yahoo or --offline)
+python "<skill-dir>/exit.py" plan --symbol TSLA --entry 364.18 --or-high 362.18 --or-low 354.47
+python "<skill-dir>/exit.py" show                          # the current trader/plan.json
 ```
 
 Other flags: `--flat-by 15:55`, `--json`, `--now "2026-10-19 10:15"` (New
@@ -83,7 +83,7 @@ A level setup has no opening range to lean on, so it needs a stop you name.
 5. Say once that the stop is a plan, not a guarantee.
 6. Hand off to `/trader-timemachine` to replay the plan, then `/trader-budget`
    to size it to the max loss per trade. Offer `/trader-alerts` for the stop,
-   the target and the flat-by time. Claude can keep `entry.py watch` running
+   the target and the flat-by time. The agent can keep `entry.py watch` running
    in the background or on a `/loop` until a setup triggers, then come here.
 
 ## Example: the reel
@@ -126,7 +126,7 @@ make a plan pass, and never calls a stop a guarantee.
 - Paper trading by default (`"paper": true`). Going live is the user's own decision, in their own config.
 - Nothing in this pack places an order except trader-broker, and only when all three hold: trader-risk
   passed that exact order today, the user typed an explicit yes for that one order in the chat, and the
-  user clicked Allow once on Claude's own card because the order tool is set to "Needs approval"
-  (Customize > Connectors > tool permissions). Never set an order tool to "Always allow".
+  user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
+  permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or the Claude Desktop config, never in the chat.
+- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.

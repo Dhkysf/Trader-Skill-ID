@@ -26,11 +26,10 @@ learning of the trade and never more than 45 days after it, so by the time
 anyone can read it the trade is days or weeks old. There is no inside
 information here: only public filings, read quickly. Say that every time.
 
-Tool in this folder (standard library Python; `pdftotext` from poppler is
-optional, to read the PDFs locally):
+`<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-pelosi` in this repo, `.agents/skills/trader-pelosi` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" --help
+python "<skill-dir>/ptr.py" --help
 ```
 
 ## What it reads and writes
@@ -60,9 +59,9 @@ python3 "${CLAUDE_SKILL_DIR}/ptr.py" --help
 ## Step 1: what has been filed
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" index --member pelosi
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" index --since 2026-10-01        # every member
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" index --member "Josh Gottheimer" --year 2025
+python "<skill-dir>/ptr.py" index --member pelosi
+python "<skill-dir>/ptr.py" index --since 2026-10-01        # every member
+python "<skill-dir>/ptr.py" index --member "Josh Gottheimer" --year 2025
 ```
 
 `--member` takes a last name, "First Last" or "Last, First", and repeats.
@@ -71,7 +70,7 @@ python3 "${CLAUDE_SKILL_DIR}/ptr.py" index --member "Josh Gottheimer" --year 202
 ## Step 2: watch for new ones
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" new --member pelosi --read
+python "<skill-dir>/ptr.py" new --member pelosi --read
 ```
 
 Shows only PTRs not seen at the last check (the first run shows the last 45
@@ -84,8 +83,8 @@ is plenty: run it with `/loop 1h` or a scheduled task.
 ## Step 3: read a report
 
 ```bash
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" fetch 20035143
-python3 "${CLAUDE_SKILL_DIR}/ptr.py" parse ptr.txt --filed 2026-08-21 --json
+python "<skill-dir>/ptr.py" fetch 20035143
+python "<skill-dir>/ptr.py" parse ptr.txt --filed 2026-08-21 --json
 ```
 
 `fetch` saves the PDF and, if `pdftotext` is installed, prints the rows. If it
@@ -148,9 +147,9 @@ does not click it or automate it. The route:
 - Paper trading by default (`"paper": true` in `trader/config.json`).
 - Nothing places an order except `/trader-broker`, and only after
   `/trader-risk` passes AND the user types an explicit yes for that order in
-  the chat, AND the brokerage tool is set to "Needs approval" in Claude
-  (Customize > Connectors > tool permissions) so Claude's own "Allow once /
-  Deny" card appears too. Never "Always allow" an order tool.
+  the chat, AND the brokerage tool is set to `ask` in Antigravity permissions
+  so the agent's own permission prompt appears too. Never set an order tool
+  to `allow`.
 - No options, margin, shorting or leverage unless the config allows it and
   the user confirms.
 - Congressional trades are PUBLIC disclosures filed up to 45 days after the

@@ -7,7 +7,6 @@ Agent-skill pack for Google Antigravity for day-trading ANALYSIS: US stocks, Ind
 Started from Jakeschincariol/day-trader-skill (MIT, upstream commit 3d0f4ef). Git remote `upstream` points there: fetch only, never push.
 
 - Each skill = `skills/<name>/SKILL.md` + one standard-library Python script.
-  (Before task P02 the folders are still `trader-*/` at the repo root.)
 - Shared market code + market profiles: `skills/trader-core/` (`market.py`, `markets/*.json`), from task P03a on.
 - Skills hand work to each other through files in `trader/` inside the user's CURRENT folder (gitignored).
 - Pipeline: scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker; alerts while a trade is open; news / analyst / pelosi on a schedule.

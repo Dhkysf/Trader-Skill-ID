@@ -79,7 +79,8 @@ class Repo(unittest.TestCase):
         self.assertTrue(readme.startswith("# Trader Skill ID"))
         for line in ("Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.",
                      "## Install",
-                     "Coming in v0.1.0 (Antigravity).",
+                     ".agents\\skills",
+                     "agy plugin install https://github.com/Dhkysf/Trader-Skill-ID",
                      "## Ringkasan (Bahasa Indonesia)",
                      "## Credits",
                      "Based on [Jake" + "schincariol/day-trader-skill](https://github.com/Jake" + "schincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.",
