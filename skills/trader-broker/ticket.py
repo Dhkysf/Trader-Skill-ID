@@ -5,7 +5,7 @@ This tool never talks to a broker and never places anything. It does its
 work around the one moment that matters, your yes:
 
   show      renders each proposed order as a plain-English ticket plus the
-            exact JSON Claude will send to Alpaca's place_stock_order tool.
+            exact JSON the agent will send to Alpaca's place_stock_order tool.
             A bracket order shows its stop-loss, take-profit and the max loss
             at the stop. An order is READY only if trader-risk passed THIS
             exact order today (matched by fingerprint) and nobody has decided
@@ -14,7 +14,7 @@ work around the one moment that matters, your yes:
             word. It refuses "yes to all", "sure", "ok", a yes that names a
             different stock or amount, and any order that is not READY.
   decline   records a no.
-  result    records what happened after the Allow once / Deny card:
+  result    records what happened after the permission prompt:
             placed (with the broker's order id), denied, or failed.
   fill      records a fill in trader/portfolio.json (cash and shares).
   flatten   builds a sell ticket that closes a symbol's open position by
@@ -363,10 +363,10 @@ def render(order, idx, total, cfg, risk, state, today):
     for w in (rv or {}).get("warnings", []):
         lines.append("  note: " + w)
     if broker == "ibkr":
-        lines.append("  Claude drafts this with the Interactive Brokers connector. IBKR sends it to your")
+        lines.append("  The agent drafts this with the Interactive Brokers connector. IBKR sends it to your")
         lines.append("  IBKR account, and it only goes to the market after you approve it there.")
     else:
-        lines.append("  Claude will call place_stock_order with exactly:")
+        lines.append("  The agent will call place_stock_order with exactly:")
         for l in json.dumps(tool_input(order), indent=2).splitlines():
             lines.append("    " + l)
         if is_bracket(order):
@@ -375,7 +375,7 @@ def render(order, idx, total, cfg, risk, state, today):
     if ready:
         lines.append("  Reply \"yes\" to place this one order, or \"no\" to skip it.")
         if broker != "ibkr":
-            lines.append("  Claude's own card then asks again: Allow once places it, Deny stops it.")
+            lines.append("  Antigravity's permission prompt asks again: approve places it, deny stops it.")
     return "\n".join(lines), ready
 
 
@@ -521,7 +521,7 @@ def cmd_approve(a):
     else:
         print("Now call place_stock_order with exactly:")
         print(json.dumps(tool_input(order), indent=2))
-        print("Claude's card shows Allow once / Deny. Then: ticket.py result --index %d --status "
+        print("Antigravity's permission prompt asks again: approve places it, deny stops it. Then: ticket.py result --index %d --status "
               "placed|denied|failed" % a.index)
     return 0
 

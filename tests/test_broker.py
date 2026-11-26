@@ -152,7 +152,7 @@ class Flow(unittest.TestCase):
         self.assertIn('"stop_loss_stop_price": "358.32"', text)
         self.assertNotIn('"plan"', text)
         self.assertNotIn('"why"', text)
-        self.assertIn("Allow once", text)
+        self.assertIn("Antigravity's permission prompt asks again", text)
 
         code, text, _ = run(self.args("approve", "--index", "1", "--reply", "sure"))
         self.assertEqual(code, 1)
