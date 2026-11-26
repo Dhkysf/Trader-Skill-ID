@@ -17,6 +17,7 @@ from _load import FIX, load
 market = load("trader-core", "market")
 scan = load("trader-scanner", "scan")
 entry = load("trader-entry", "entry")
+exitp = load("trader-exit", "exit")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -235,6 +236,81 @@ class IdxEntryTest(unittest.TestCase):
         ])
         self.assertEqual(code, 0, err)
         self.assertIn("TRIGGERED 11:55 AM", out)
+
+
+class IdxExitTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = os.path.join(self.tmp.name, "config.json")
+        with open(self.cfg, "w", encoding="utf-8") as fh:
+            json.dump({"market": "idx"}, fh)
+        self.idx = market.load("idx")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_exit(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = exitp.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_tick_rounding_and_two_tick_minimum_risk(self):
+        sr, sp = exitp.parse_stop("price:9873")
+        tr, tp = exitp.parse_target("2R")
+        c = exitp.compute(9900, sr, sp, tr, tp, p=self.idx)
+        self.assertEqual(c["stop"], Decimal("9850"))
+        self.assertEqual(c["risk"], Decimal("50"))
+        self.assertEqual(c["target"], Decimal("10000"))
+
+        # 1-tick risk (9900 -> 9875) refused
+        sr1, sp1 = exitp.parse_stop("price:9875")
+        with self.assertRaises(exitp.PlanError) as cm:
+            exitp.compute(9900, sr1, sp1, tr, tp, p=self.idx)
+        self.assertIn("2 ticks", str(cm.exception))
+
+        # Tick boundary at 5000: 1 tick below 5000 is 10, so 4990 is 1 tick (refused), 4980 is 2 ticks (allowed)
+        sr_b1, sp_b1 = exitp.parse_stop("price:4990")
+        with self.assertRaises(exitp.PlanError):
+            exitp.compute(5000, sr_b1, sp_b1, tr, tp, p=self.idx)
+        sr_b2, sp_b2 = exitp.parse_stop("price:4980")
+        self.assertEqual(exitp.compute(5000, sr_b2, sp_b2, tr, tp, p=self.idx)["risk"], Decimal("20"))
+
+    def test_arb_ara_and_lunch_break_warnings_and_bbca_end_to_end(self):
+        # ARB lock warning when stop is below today's ARB (prev_close=10000 -> ARB=9300)
+        code, out, err = self.run_exit([
+            "plan", "--config", self.cfg, "--symbol", "BBCA", "--entry", "9900",
+            "--stop", "price:9200", "--target", "price:12500", "--prev-close", "10000",
+            "--date", "2026-11-23", "--time", "09:35", "--now", "2026-11-23 09:40",
+        ])
+        self.assertEqual(code, 0, err)
+        self.assertIn("ARB lock: a stop there may not fill", out)
+        self.assertIn("above today's ARA", out)
+        self.assertIn("the price can gap after the lunch break", out)
+        self.assertIn("Flat by       15:45 WIB", out)
+
+        # Session 2 entry does not warn about lunch break
+        code, out, err = self.run_exit([
+            "plan", "--config", self.cfg, "--symbol", "BBCA", "--entry", "5700",
+            "--stop", "price:5600", "--date", "2026-11-23", "--time", "14:05", "--now", "2026-11-23 14:10",
+        ])
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("lunch break", out)
+
+        # End-to-end offline BBCA: entry -> exit
+        epath = os.path.join(self.tmp.name, "entry.json")
+        ppath = os.path.join(self.tmp.name, "plan.json")
+        code, _, err = (lambda a: (entry.main(a), None, None))(
+            ["check", "BBCA", "--config", self.cfg, "--offline", BBCA_5M,
+             "--now", "2026-11-23 09:35", "--write", epath]
+        )
+        self.assertEqual(code, 0, err)
+        code, out, err = self.run_exit([
+            "plan", "--config", self.cfg, "--from", epath, "--now", "2026-11-23 09:40", "--write", ppath,
+        ])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Exit plan: BBCA.JK long", out)
+        self.assertIn("the price can gap after the lunch break", out)
 
 
 if __name__ == "__main__":
