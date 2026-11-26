@@ -774,8 +774,10 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
     so a computer that dozed off catches up as soon as it wakes."""
     prof = market.from_config((opts or {}).get("cfg"))
     tz_lbl = _tz_label(prof)
+    delay_min = int(prof.get("data_delay_min") or 0)
+    delay = delay_min * 60
     step = INTERVALS[opts.get("interval", "5m")]
-    printed, errors, said_preopen, said_break, first = -1, 0, False, None, True
+    printed, errors, said_preopen, said_delay, said_break, first = -1, 0, False, False, None, True
     next_fetch = None
     while True:
         now = clock()
@@ -788,6 +790,10 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
         if not sess:
             emit("%s: market closed today (%s). Nothing to watch." % (day.isoformat(), trading_day(day, prof)[1]))
             return 1, None
+        if delay_min > 0 and not said_delay:
+            emit("%s data is about %d min late: each bar is checked about %d min after it closes." % (
+                _exchange(prof), delay_min, delay_min))
+            said_delay = True
         open_dt = datetime.datetime.combine(day, sess[0][0])
         close_dt = datetime.datetime.combine(day, sess[-1][1])
         if local < open_dt + datetime.timedelta(seconds=step):
@@ -797,7 +803,7 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
                     "not open yet" if local < open_dt else "open, no bar closed yet",
                     short(open_dt + datetime.timedelta(seconds=step))))
                 said_preopen = True
-            next_fetch = market.local_to_utc(prof, open_dt) + datetime.timedelta(seconds=step + GRACE)
+            next_fetch = market.local_to_utc(prof, open_dt) + datetime.timedelta(seconds=step + delay + GRACE)
             continue
         try:
             chart = provider(now)
@@ -851,14 +857,22 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
                 nxt = until
             next_fetch = market.local_to_utc(prof, nxt)
             continue
-        # sleep until just after the next bar closes; poll every `every` seconds if Yahoo is behind
-        cur_slot = int((local - open_dt).total_seconds()) // step
-        expected_last = cur_slot - 1
-        behind = (not bars) or bars[-1]["slot"] < expected_last
+        # sleep until just after the next bar is expected; poll every `every` seconds if Yahoo is behind
+        feed_local = local - datetime.timedelta(seconds=delay)
+        feed_slot = int((feed_local - open_dt).total_seconds() // step)
+        expected_last, next_slot = -1, None
+        for so_t, sc_t in sess:
+            s_first = int((datetime.datetime.combine(day, so_t) - open_dt).total_seconds() // step)
+            s_last = int(((datetime.datetime.combine(day, sc_t) - open_dt).total_seconds() - 1) // step)
+            if feed_slot - 1 >= s_first:
+                expected_last = min(feed_slot - 1, s_last)
+            if next_slot is None and feed_slot <= s_last:
+                next_slot = max(feed_slot, s_first)
+        behind = expected_last >= 0 and ((not bars) or bars[-1]["slot"] < expected_last)
         if behind:
             wait = every
         else:
-            nxt = open_dt + datetime.timedelta(seconds=(cur_slot + 1) * step + GRACE)
+            nxt = open_dt + datetime.timedelta(seconds=((next_slot if next_slot is not None else feed_slot) + 1) * step + delay + GRACE)
             wait = (nxt - local).total_seconds()
         cutoff = datetime.datetime.combine(day, parse_hhmm(res.get("no_entries_after") or "15:30", "cutoff", p=prof))
         for stop_at in (until, cutoff, close_dt):

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
+from unittest import mock
 
 from _load import FIX, load
 
@@ -237,6 +238,87 @@ class IdxEntryTest(unittest.TestCase):
         ])
         self.assertEqual(code, 0, err)
         self.assertIn("TRIGGERED 11:55 AM", out)
+
+
+class IdxWatchTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.idx = market.load("idx")
+        base = entry.parse_chart(entry.read_text(BBCA_5M), "BBCA")
+        cls.prev_close = base["prev_close"]
+        cls.thu_bars = [
+            dict(b) for b in base["bars"]
+            if market.to_local(cls.idx, entry.utc_of(b["t"])).date().isoformat() == "2026-11-26"
+        ]
+        # fixture was captured before 2026-11-27 open; shift Friday 2026-11-20 bars +7d
+        cls.fri_bars = [
+            dict(b, t=b["t"] + 7 * 86400) for b in base["bars"]
+            if market.to_local(cls.idx, entry.utc_of(b["t"])).date().isoformat() == "2026-11-20"
+        ]
+
+    def _provider(self, day_bars, delay_min=10, calls=None):
+        def provider(now):
+            if calls is not None:
+                calls.append(now)
+            data_ts = entry.ts_of(now) - delay_min * 60
+            bars = [dict(b) for b in day_bars if b["t"] % 300 == 0 and b["t"] + 300 <= data_ts]
+            return {"symbol": "BBCA.JK", "meta": {}, "bars": bars, "prev_close": self.prev_close, "data_time": data_ts}
+        return provider
+
+    def _run(self, day_bars, start_text, delay_min=10, every=30, until=None):
+        clock = entry.SimClock(entry.parse_now(start_text, p=self.idx))
+        calls, lines = [], []
+        opts = {"setup": "level", "or_minutes": 15, "interval": "5m", "level": 99999,
+                "min_volume_x": None, "cfg": {"market": "idx"}}
+        code, res = entry.watch_loop(
+            self._provider(day_bars, delay_min=delay_min, calls=calls),
+            clock.now, clock.sleep, lines.append, opts, every=every, until=until,
+        )
+        return code, res, lines, calls, clock
+
+    def test_thursday_delay_10_calls_expiry_and_notice(self):
+        code, res, lines, calls, clock = self._run(self.thu_bars, "2026-11-26 09:00", delay_min=10, every=30)
+        self.assertEqual(code, 1)
+        self.assertEqual(res["status"], "expired")
+        self.assertEqual(market.to_local(self.idx, clock.now()).strftime("%H:%M"), "15:30")
+        self.assertTrue(any(line.startswith("EXPIRED") for line in lines))
+        self.assertLessEqual(len(calls), 90)
+        notice = "IDX data is about 10 min late: each bar is checked about 10 min after it closes."
+        self.assertEqual(lines[0], notice)
+        self.assertEqual(lines.count(notice), 1)
+
+    def test_thursday_lunch_break_and_resume(self):
+        _, _, lines, calls, _ = self._run(self.thu_bars, "2026-11-26 09:00", delay_min=10, every=30)
+        times = [market.to_local(self.idx, c).time() for c in calls]
+        lunch_calls = [t for t in times if datetime.time(12, 0) <= t < datetime.time(13, 30)]
+        self.assertEqual(len(lunch_calls), 1)
+        self.assertEqual(sum(1 for line in lines if line.startswith("LUNCH BREAK")), 1)
+        after = [t for t in times if t >= datetime.time(13, 30)]
+        self.assertTrue(after)
+        self.assertGreaterEqual(after[0], datetime.time(13, 35))
+
+    def test_friday_lunch_break_no_calls_between_1135_and_1400(self):
+        _, res, lines, calls, _ = self._run(self.fri_bars, "2026-11-27 09:00", delay_min=10, every=30)
+        times = [market.to_local(self.idx, c).time() for c in calls]
+        self.assertEqual([t for t in times if datetime.time(11, 35) <= t < datetime.time(14, 0)], [])
+        self.assertEqual(sum(1 for line in lines if line.startswith("LUNCH BREAK")), 1)
+        self.assertEqual(res["status"], "expired")
+        self.assertLessEqual(len(calls), 90)
+
+    def test_delay_0_keeps_original_60_calls(self):
+        with mock.patch.dict(entry.market.load("idx"), {"data_delay_min": 0}):
+            _, res, lines, calls, _ = self._run(self.thu_bars, "2026-11-26 09:00", delay_min=0, every=30)
+        self.assertEqual(len(calls), 60)
+        self.assertEqual(res["status"], "expired")
+        self.assertFalse(any("each bar is checked" in line for line in lines))
+
+    def test_falls_back_to_every_when_feed_lags_past_delay(self):
+        _, _, _, calls, _ = self._run(
+            self.thu_bars, "2026-11-26 09:00", delay_min=11, every=30,
+            until=datetime.datetime(2026, 11, 26, 9, 20),
+        )
+        times = [market.to_local(self.idx, c).strftime("%H:%M:%S") for c in calls]
+        self.assertEqual(times[:4], ["09:15:02", "09:15:32", "09:16:02", "09:20:00"])
 
 
 class IdxExitTest(unittest.TestCase):
