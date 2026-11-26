@@ -14,6 +14,13 @@
     "thu": [["09:00", "12:00"], ["13:30", "15:50"]],
     "fri": [["09:00", "11:30"], ["14:00", "15:50"]]
   },
+  "pre_closing": ["15:50", "16:00"],
+  "defaults": {
+    "no_entries_before": "09:15",
+    "no_entries_after": "15:30",
+    "flat_by": "15:45",
+    "no_entries_before_break_min": 10
+  },
   "holidays": {
     "2026-01-01": "IDX trading holiday",
     "2026-01-16": "IDX trading holiday",

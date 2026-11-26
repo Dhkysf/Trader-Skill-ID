@@ -252,6 +252,15 @@ MONEY_LIMIT_ALIASES = (
 )
 
 
+def yahoo_symbol(p, sym):
+    """Format `sym` for Yahoo Finance using profile `p`'s suffix (e.g. '.JK' for IDX)."""
+    s = str(sym).upper()
+    suf = (p or {}).get("yahoo_suffix") or ""
+    if suf:
+        return s if s.endswith(suf.upper()) else s + suf
+    return s.replace(".", "-")
+
+
 def merge_config(cfg, defaults=None):
     """Merge user config over optional defaults, resolving *_usd aliases.
     Returns (merged_dict, notices). If both new and old keys are set, new wins."""

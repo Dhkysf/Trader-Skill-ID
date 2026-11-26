@@ -16,6 +16,7 @@ from _load import FIX, load
 
 market = load("trader-core", "market")
 scan = load("trader-scanner", "scan")
+entry = load("trader-entry", "entry")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -164,6 +165,76 @@ class IdxScannerTest(unittest.TestCase):
             doc = json.load(fh)
         self.assertEqual(doc["scanned"], 1)
         self.assertEqual(doc["delay_notice"], DELAY_MSG)
+
+
+class IdxEntryTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = os.path.join(self.tmp.name, "config.json")
+        with open(self.cfg, "w", encoding="utf-8") as fh:
+            json.dump({"market": "idx"}, fh)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_entry(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = entry.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_friday_session1_and_lunch_break_on_bbca(self):
+        # 11:25 on Friday 2026-11-20 is still session 1
+        code, out, err = self.run_entry([
+            "check", "BBCA", "--config", self.cfg, "--offline", BBCA_5M,
+            "--now", "2026-11-20 11:25", "--json",
+        ])
+        self.assertEqual(code, 1, err)
+        r = json.loads(out)
+        self.assertEqual((r["status"], r["phase"]), ("waiting", "open"))
+
+        # 11:35 on Friday 2026-11-20 is lunch break, next session at 14:00
+        code, out, err = self.run_entry([
+            "check", "BBCA", "--config", self.cfg, "--offline", BBCA_5M,
+            "--now", "2026-11-20 11:35",
+        ])
+        self.assertEqual(code, 1, err)
+        self.assertIn("market on lunch break, next session at 14:00", out)
+
+    def test_monday_session2_trigger_and_delay_note(self):
+        # Monday 2026-11-23: 13:30 bar closes at 13:35 at 5700 (> 5690)
+        cfg2 = os.path.join(self.tmp.name, "cfg_s2.json")
+        with open(cfg2, "w", encoding="utf-8") as fh:
+            json.dump({"market": "idx", "no_entries_before": "13:30"}, fh)
+        code, out, err = self.run_entry([
+            "check", "BBCA", "--config", cfg2, "--offline", BBCA_5M,
+            "--setup", "level", "--level", "5690", "--now", "2026-11-23 13:35",
+        ])
+        self.assertEqual(code, 0, err)
+        self.assertIn("TRIGGERED 1:35 PM", out)
+        self.assertIn("13:30 bar", out)
+        self.assertIn("data about 10 min late", out)
+
+    def test_pre_break_blackout_default_and_override(self):
+        # Monday 2026-11-16: 11:50 bar closes at 11:55 (within 10 min of 12:00 lunch) at 5475 (> 5470)
+        cfg_s1 = os.path.join(self.tmp.name, "cfg_prebreak.json")
+        with open(cfg_s1, "w", encoding="utf-8") as fh:
+            json.dump({"market": "idx", "no_entries_before": "11:51"}, fh)
+        code, out, _ = self.run_entry([
+            "check", "BBCA", "--config", cfg_s1, "--offline", BBCA_5M,
+            "--setup", "level", "--level", "5470", "--now", "2026-11-16 11:55",
+        ])
+        self.assertEqual(code, 1)
+        self.assertIn("within 10 min of the lunch break", out)
+
+        with open(cfg_s1, "w", encoding="utf-8") as fh:
+            json.dump({"market": "idx", "no_entries_before": "11:51", "no_entries_before_break_min": 0}, fh)
+        code, out, err = self.run_entry([
+            "check", "BBCA", "--config", cfg_s1, "--offline", BBCA_5M,
+            "--setup", "level", "--level", "5470", "--now", "2026-11-16 11:55",
+        ])
+        self.assertEqual(code, 0, err)
+        self.assertIn("TRIGGERED 11:55 AM", out)
 
 
 if __name__ == "__main__":

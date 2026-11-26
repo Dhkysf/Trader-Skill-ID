@@ -24,6 +24,12 @@
     "thu": [["09:30", "16:00"]],
     "fri": [["09:30", "16:00"]]
   },
+  "defaults": {
+    "no_entries_before": "09:45",
+    "no_entries_after": "15:30",
+    "flat_by": "15:55",
+    "no_entries_before_break_min": 0
+  },
   "early_close": {
     "time": "13:00",
     "dates": {
