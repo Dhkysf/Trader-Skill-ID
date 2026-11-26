@@ -97,6 +97,15 @@ ticker has no news, say so rather than padding the brief.
 - Never hammers a server: one request per feed per ticker, a pause between
   calls, and SEC's 10 requests a second limit stays far away.
 
+## IDX (Indonesian stocks, default)
+
+When `"market"` is `"idx"` (the default when omitted in `trader/config.json`):
+
+- Reads RSS feeds from `news_feeds` (`label`, `url`) in `trader/config.json` (see `skills/trader-budget/config.example.json`).
+- Matches items to watched tickers by stock code and by company name from `trader/universe.txt` (`SYMBOL|Name`, `--universe`), ignoring unrelated items.
+- Checks the price move via Yahoo Finance chart (`.JK` suffix) and prints times in `WIB` and prices in `Rp`.
+- Does not call SEC EDGAR or ask for `sec_user_agent`.
+
 ## Safety
 
 Education and tooling, not financial advice. This skill only reads and

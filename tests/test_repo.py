@@ -143,6 +143,9 @@ class Repo(unittest.TestCase):
         self.assertEqual(cfg["broker"], "manual")
         self.assertNotIn("sec_user_agent", cfg)
         self.assertNotIn("pdt_guard", cfg)
+        self.assertGreaterEqual(len(cfg.get("news_feeds", [])), 3)
+        for feed in cfg["news_feeds"]:
+            self.assertTrue(feed.get("label") and feed.get("url") and feed.get("checked"))
         self.assertIs(cfg["require_stop"], True)
         self.assertIs(cfg.get("allow_short", False), False)
         self.assertIs(cfg.get("allow_margin", False), False)

@@ -4,6 +4,7 @@ Fixtures under tests/fixtures/idx/ were fetched from Yahoo Finance on 2026-11-27
 """
 
 import datetime
+import gzip
 import io
 import json
 import os
@@ -17,6 +18,7 @@ from _load import FIX, load
 
 market = load("trader-core", "market")
 scan = load("trader-scanner", "scan")
+news = load("trader-news", "news")
 entry = load("trader-entry", "entry")
 exitp = load("trader-exit", "exit")
 alerts = load("trader-alerts", "alerts")
@@ -945,6 +947,91 @@ class DefaultIdxWithoutMarketKey(unittest.TestCase):
             self.assertIn("BBCA.JK", buf.getvalue())
             self.assertIn("WIB", buf.getvalue())
             self.assertIn("Rp ", buf.getvalue())
+
+
+class IdxNewsRssTest(unittest.TestCase):
+    # Real RSS fixture cut from https://www.cnbcindonesia.com/market/rss (checked 2026-11-27)
+    FEED = {"label": "CNBC Indonesia Market", "url": "https://www.cnbcindonesia.com/market/rss"}
+
+    def _run_news(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = news.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_real_cnbc_rss_matches_bbca_and_ignores_unrelated(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"news_feeds": [self.FEED]}, fh)  # no "market" key -> defaults to idx
+            uni_p = os.path.join(d, "universe.txt")
+            with open(uni_p, "w", encoding="utf-8") as fh:
+                fh.write("BBCA|PT Bank Central Asia Tbk.\nTLKM|PT Telkom Indonesia (Persero) Tbk.\n")
+            state_p = os.path.join(d, "state", "news.json")
+            code, out, err = self._run_news([
+                "--tickers", "BBCA", "--config", cfg_p, "--universe", uni_p,
+                "--offline", IDX_FIX, "--state", state_p,
+                "--hours", "72", "--now", "2026-11-26T12:00:00+07:00",
+                "--portfolio", os.path.join(d, "none.json"),
+                "--watchlist", os.path.join(d, "none.json"),
+                "--plan", os.path.join(d, "none.json"),
+            ])
+            self.assertEqual(code, 0, err)
+            self.assertIn("BBCA", out)
+            self.assertIn("CNBC Indonesia Market", out)
+            self.assertIn("WIB", out)
+            self.assertNotIn("TLKM", out)
+            self.assertNotIn("Lelang", out)
+            self.assertNotIn("sec_user_agent", out.lower())
+            self.assertNotIn("SEC", out)
+            with open(state_p, encoding="utf-8") as fh:
+                seen = json.load(fh)["seen"]
+            self.assertEqual(len(seen), 1)
+
+    def test_company_name_match_and_case_sensitive_ticker(self):
+        xml = (
+            '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+            '<item><title>Bank Central Asia Rilis Layanan Baru</title>'
+            '<link>https://example.com/1</link><guid>id-1</guid>'
+            '<pubDate>Thu, 26 Nov 2026 10:00:00 +0700</pubDate>'
+            '<description>Layanan digital baru diluncurkan.</description></item>'
+            '<item><title>Saham BBCA Menguat Tipis</title>'
+            '<link>https://example.com/2</link><guid>id-2</guid>'
+            '<pubDate>Thu, 26 Nov 2026 09:00:00 +0700</pubDate>'
+            '<description>Perdagangan sesi pagi.</description></item>'
+            '<item><title>Berita Umum: goto pasar modal</title>'
+            '<link>https://example.com/3</link><guid>id-3</guid>'
+            '<pubDate>Thu, 26 Nov 2026 08:00:00 +0700</pubDate>'
+            '<description>Tidak terkait emiten.</description></item>'
+            '</channel></rss>'
+        )
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "feed-cnbc-indonesia-market.xml"), "w", encoding="utf-8") as fh:
+                fh.write(xml)
+            with gzip.open(BBCA_5M, "rt", encoding="utf-8") as fh:
+                chart_doc = json.load(fh)
+            with open(os.path.join(d, "chart-BBCA.json"), "w", encoding="utf-8") as fh:
+                json.dump(chart_doc, fh)
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"news_feeds": [self.FEED]}, fh)
+            uni_p = os.path.join(d, "universe.txt")
+            with open(uni_p, "w", encoding="utf-8") as fh:
+                fh.write("BBCA|PT Bank Central Asia Tbk.\nGOTO|PT GoTo Gojek Tokopedia Tbk.\n")
+            code, out, err = self._run_news([
+                "--tickers", "BBCA", "GOTO", "--config", cfg_p, "--universe", uni_p,
+                "--offline", d, "--state", os.path.join(d, "state.json"),
+                "--hours", "48", "--now", "2026-11-26T12:00:00+07:00", "--json",
+                "--portfolio", os.path.join(d, "none.json"),
+                "--watchlist", os.path.join(d, "none.json"),
+                "--plan", os.path.join(d, "none.json"),
+            ])
+            self.assertEqual(code, 0, err)
+            data = json.loads(out)
+            self.assertEqual(len(data["items"]), 2)
+            self.assertTrue(all(it["touches"] == ["BBCA"] for it in data["items"]))
+            self.assertEqual(len(data["moves"]), 1)
+            self.assertEqual(data["moves"][0]["ticker"], "BBCA")
 
 
 if __name__ == "__main__":

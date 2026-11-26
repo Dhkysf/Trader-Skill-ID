@@ -37,6 +37,12 @@ CONTRACT_CFG = {
     "no_entries_before": "09:15", "no_entries_after": "15:30", "flat_by": "15:45",
     "fractional": False, "broker": "manual", "paper": True, "blocked": [],
     "allow_options": False, "allow_margin": False, "allow_short": False,
+    "news_feeds": [
+        {"label": "CNBC Indonesia Market", "url": "https://www.cnbcindonesia.com/market/rss", "checked": "2026-11-27"},
+        {"label": "IDX Channel Market", "url": "https://www.idxchannel.com/rss/market-news", "checked": "2026-11-27"},
+        {"label": "Tempo Bisnis", "url": "https://rss.tempo.co/bisnis", "checked": "2026-11-27"},
+        {"label": "Sindo Ekbis", "url": "https://ekbis.sindonews.com/rss", "checked": "2026-11-27"},
+    ],
 }
 # v1's rules, for the weights mode tests
 V1 = {"market": "us", "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_usd": 2000, "min_order_usd": 5,

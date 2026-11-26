@@ -20,5 +20,27 @@
   "blocked": [],
   "allow_options": false,
   "allow_margin": false,
-  "allow_short": false
+  "allow_short": false,
+  "news_feeds": [
+    {
+      "label": "CNBC Indonesia Market",
+      "url": "https://www.cnbcindonesia.com/market/rss",
+      "checked": "2026-11-27"
+    },
+    {
+      "label": "IDX Channel Market",
+      "url": "https://www.idxchannel.com/rss/market-news",
+      "checked": "2026-11-27"
+    },
+    {
+      "label": "Tempo Bisnis",
+      "url": "https://rss.tempo.co/bisnis",
+      "checked": "2026-11-27"
+    },
+    {
+      "label": "Sindo Ekbis",
+      "url": "https://ekbis.sindonews.com/rss",
+      "checked": "2026-11-27"
+    }
+  ]
 }
