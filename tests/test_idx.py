@@ -20,6 +20,7 @@ scan = load("trader-scanner", "scan")
 entry = load("trader-entry", "entry")
 exitp = load("trader-exit", "exit")
 alerts = load("trader-alerts", "alerts")
+tm = load("trader-timemachine", "timemachine")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
@@ -457,6 +458,114 @@ class IdxAlertsTest(unittest.TestCase):
         with self.assertRaises(alerts.AlertError) as cm:
             alerts.get_quotes(["BBCA"], source="stooq", p=self.idx)
         self.assertIn("stooq has no IDX quotes", str(cm.exception))
+
+
+class IdxTimeMachineTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.idx = market.load("idx")
+        with open(BBCA_5M, "rb") as fh:
+            import gzip
+            cls.bbca_text = gzip.decompress(fh.read()).decode("utf-8")
+        cls.bbca_result = tm.chart_result(cls.bbca_text, "BBCA")
+
+    def _plan(self, **kw):
+        raw = {
+            "symbol": "BBCA", "side": "buy", "date": "2026-11-26", "setup": "orb",
+            "entry": 5875.0, "entry_time": "09:25 AM", "interval": "5m",
+            "opening_range": {"high": 5850.0, "low": 5800.0, "minutes": 15},
+            "stop": 5825.0, "stop_rule": "or_mid", "target": 5975.0, "target_r": 2.0,
+            "market": "idx",
+        }
+        raw.update(kw)
+        return tm.normalize_plan(raw)
+
+    def test_slot_counts_and_excluded_bars(self):
+        sm_thu = tm.slot_map(self.idx, "2026-11-26")
+        sm_fri = tm.slot_map(self.idx, "2026-11-20")
+        self.assertEqual((sm_thu["session_counts"], sm_thu["total"], sm_thu["s2_starts"]), ([36, 28], 64, frozenset({36})))
+        self.assertEqual((sm_fri["session_counts"], sm_fri["total"], sm_fri["s2_starts"]), ([30, 22], 52, frozenset({30})))
+
+        _, bars, _ = tm.parse_bars(self.bbca_result, tm.parse_now("2026-11-27 08:30", p=self.idx), p=self.idx)
+        excluded = {"15:50", "15:55", "16:00", "16:05", "16:10"}
+        self.assertFalse(any(b["start"] in excluded for b in bars))
+        days = tm.split_sessions(bars)
+        full, short = tm.full_sessions(days, "2026-11-26", p=self.idx)
+        self.assertEqual(len(full), 58)
+        self.assertEqual(short, [{"date": "2026-10-16", "bars": 47}])
+
+    def test_session2_lunch_gap_isolation(self):
+        _, bars, _ = tm.parse_bars(self.bbca_result, tm.parse_now("2026-11-27 08:30", p=self.idx), p=self.idx)
+        full, _ = tm.full_sessions(tm.split_sessions(bars), "2026-11-26", p=self.idx)
+        pool_thu = tm.build_pool(full, p=self.idx, plan_date="2026-11-26")
+        pool_fri = tm.build_pool(full, p=self.idx, plan_date="2026-11-20")
+        self.assertEqual(len(pool_thu[36]), 58)
+        self.assertEqual(len(pool_fri[30]), 58)
+        self.assertEqual(len(pool_thu[42]), 47)  # 14:00 on Mon-Thu only, never Friday's 14:00 session-2 open
+
+        # Synthetic check: with window=2, slot 36 draws only from pool[36], never 35/37
+        sm_thu = tm.slot_map(self.idx, "2026-11-26")
+        syn_pool = [(1.0, 1.0, 1.0, 1.0)] * 64
+        syn_pool = [([(1.0, 1.0, 1.0, 1.0)] if i != 36 else [(1.05, 1.05, 1.05, 1.05)]) for i in range(64)]
+        mc = tm.simulate(syn_pool, 5000.0, 4900.0, 6000.0, k=34, last=37, replays=50, seed=19, window=2, slot_info=sm_thu)
+        self.assertEqual(mc["median_close"], 5250.0)
+
+    def test_bbca_ar_band_ticks_and_report(self):
+        now_u = tm.parse_now("2026-11-26 16:00", p=self.idx)
+        doc = tm.time_machine(self.bbca_text, self._plan(), now_u, replays=10000, seed=19, p=self.idx)
+        m = doc["mc"]
+        self.assertEqual(m["ar_band"], {"low": 5425.0, "high": 6975.0, "ref": 5825.0})
+        for path in m["sample_paths"]:
+            self.assertTrue(all(5425.0 <= px <= 6975.0 for px in path))
+        for row in m["bands"]:
+            self.assertTrue(all(5425.0 <= px <= 6975.0 for px in row))
+        self.assertTrue(5425.0 <= m["median_close"] <= 6975.0)
+        for tr in doc["history"]["trades"]:
+            self.assertTrue(market.valid_tick(self.idx, tr["entry"]))
+            self.assertTrue(market.valid_tick(self.idx, tr["stop"]))
+            self.assertTrue(market.valid_tick(self.idx, tr["target"]))
+
+        rep = "\n".join(tm.report(doc))
+        self.assertIn("hit the ARB/ARA limit in ", rep)
+        self.assertIn(" of 10,000 runs.", rep)
+        self.assertIn(DELAY_MSG, rep)
+        self.assertIn("Fewer than 20 full sessions means no verdict", rep)
+
+        # Tight ARB below entry forces band hits and clamping
+        doc_hit = tm.time_machine(self.bbca_text, self._plan(prev_close=6250.0), now_u, replays=2000, seed=19, p=self.idx)
+        self.assertGreater(doc_hit["mc"]["ar_hits"], 0)
+        for path in doc_hit["mc"]["sample_paths"]:
+            self.assertTrue(all(5825.0 <= px <= 7500.0 for px in path))
+
+        # Invalid tick refused
+        with self.assertRaises(tm.TMError):
+            self._plan(stop=5810.0)
+
+        # Friday run
+        fri_p = self._plan(date="2026-11-20", entry=5625.0, stop=5575.0, target=5725.0,
+                           opening_range={"high": 5675.0, "low": 5575.0, "minutes": 15})
+        doc_fri = tm.time_machine(self.bbca_text, fri_p, tm.parse_now("2026-11-20 16:00", p=self.idx),
+                                  replays=200, seed=19, p=self.idx)
+        self.assertEqual(doc_fri["mc"]["bars_left"], 47)
+
+    def test_determinism_and_us_tsla_reproduction(self):
+        now_u = tm.parse_now("2026-11-26 16:00", p=self.idx)
+        a = tm.time_machine(self.bbca_text, self._plan(), now_u, replays=500, seed=7, p=self.idx)["mc"]
+        b = tm.time_machine(self.bbca_text, self._plan(), now_u, replays=500, seed=7, p=self.idx)["mc"]
+        self.assertEqual(a, b)
+
+        tsla_gz = os.path.join(FIX, "trader-timemachine", "TSLA-60d5m.json.gz")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = tm.main([
+                "run", "--symbol", "TSLA", "--date", "2026-10-19", "--entry", "364.18",
+                "--stop", "358.32", "--target", "370.04", "--entry-time", "10:15 AM",
+                "--offline", tsla_gz, "--now", "2026-10-19 10:50",
+            ])
+        self.assertEqual(code, 0)
+        text = out.getvalue()
+        for s in ("29.4 %", "25.5 %", "45.1 %", "fired 33 times: 13 target, 15 stop, 5 neither"):
+            self.assertIn(s, text)
 
 
 if __name__ == "__main__":

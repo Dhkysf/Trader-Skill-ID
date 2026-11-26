@@ -156,6 +156,23 @@ and never calls a result a sure thing. It never prints a P&L or a profit.
 It never uses a bar that has not closed yet, and never mixes today's bars
 into the pool.
 
+## IDX (Indonesian stocks)
+
+Pass `--config trader/config.json` (with `"market": "idx"`) or a `trader/plan.json`
+that carries `"market": "idx"`.
+
+- **Separate slot maps:** Mon-Thu (36 + 28 = 64 bars) and Friday (30 + 22 = 52
+  bars) use separate slot maps. Lunch-break, pre-closing (15:50/15:55), 16:00
+  closing-auction, and post-trading (16:05-16:10) bars are excluded.
+- **Lunch gap:** the first bar of session 2 draws only from past
+  first-bars-of-session-2, so the lunch gap is part of the simulation.
+- **ARA/ARB band and ticks:** simulated prices are clamped to the day's
+  ARA/ARB band (reference = previous close), stops and targets are checked for
+  valid IDX ticks, and runs that touch the band edge are counted.
+- **Delay and minimum sessions:** Yahoo `.JK` data is about 10 minutes late.
+  Fewer than 20 full sessions means no verdict (same rule as US).
+- **Out of scope:** budget/risk/broker, short trades, forex.
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.
