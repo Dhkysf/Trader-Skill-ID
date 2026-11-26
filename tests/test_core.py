@@ -107,6 +107,46 @@ class CoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             market.round_tick(us, 10.0, "invalid")
 
+    def test_from_config(self):
+        self.assertIs(market.from_config(None), market.load("us"))
+        self.assertIs(market.from_config("/nonexistent/config.json"), market.load("us"))
+        self.assertIs(market.from_config({}), market.load("us"))
+        self.assertIs(market.from_config({"market": "us"}), market.load("us"))
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, "config.json")
+            with open(cfg, "w", encoding="utf-8") as fh:
+                fh.write('{"market": "us"}\n')
+            self.assertIs(market.from_config(cfg), market.load("us"))
+        with self.assertRaises(ValueError):
+            market.from_config({"market": "bogus"})
+
+    def test_money_formatting(self):
+        us = market.load("us")
+        self.assertEqual(market.money(us, 50), "$50")
+        self.assertEqual(market.money(us, 1250), "$1,250")
+        self.assertEqual(market.money(us, 46.88), "$46.88")
+        self.assertEqual(market.money(us, 2913.44), "$2,913.44")
+        self.assertEqual(market.money(us, 0), "$0")
+        self.assertEqual(market.money(us, -0.001), "$0")
+        self.assertEqual(market.money(us, -50), "$-50")
+        self.assertEqual(market.money({"currency": "IDR"}, 15000), "IDR 15,000")
+
+    def test_no_second_dst_implementation_in_skills(self):
+        skills_dir = os.path.join(ROOT, "skills")
+        found = []
+        for base, _, files in os.walk(skills_dir):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                path = os.path.join(base, f)
+                with open(path, encoding="utf-8") as fh:
+                    src = fh.read()
+                if "def eastern_offset(" in src:
+                    found.append(os.path.relpath(path, ROOT))
+                    self.assertIn("market.utc_offset(", src, path)
+                    self.assertNotIn("def _nth_sunday(", src, path)
+        self.assertGreaterEqual(len(found), 9)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -58,6 +58,13 @@ import math
 import os
 import sys
 
+_CORE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "trader-core"))
+if _CORE not in sys.path:
+    sys.path.insert(0, _CORE)
+import market  # noqa: E402
+
+_US = market.load("us")
+
 # v2 defaults: the contract's config.example.json. Missing keys fall back to these.
 DEFAULTS = {
     "budget": None,
@@ -94,36 +101,23 @@ class SizeError(Exception):
 
 # ---------------------------------------------------------------- time (New York, no tz files)
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+_nth_sunday = market._nth_sunday
 
 
 def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+    """Hours from UTC for New York: -4 in daylight time, -5 otherwise."""
+    return market.utc_offset(_US, utc)
 
 
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    return market.to_local(_US, utc)
 
 
 def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+    return market.local_to_utc(_US, local)
 
 
-def parse_now(text):
+def parse_now(text, p=None):
     """ISO time -> naive UTC. A time without an offset is taken as New York time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
@@ -133,7 +127,7 @@ def parse_now(text):
     except ValueError:
         raise SizeError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return market.local_to_utc(p or _US, dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
 
 
@@ -293,11 +287,8 @@ def _num(x):
     return "%.2f" % x
 
 
-def money(x):
-    x = float(x)
-    if abs(x - round(x)) < 0.005:
-        return "$" + "{:,.0f}".format(round(x))
-    return "$" + "{:,.2f}".format(x)
+def money(x, p=None):
+    return market.money(p or _US, x)
 
 
 # ---------------------------------------------------------------- plan mode (the default)
@@ -773,8 +764,9 @@ def write_orders(path, orders, cfg, source="", now_utc=None):
 # ---------------------------------------------------------------- main
 
 def run_plan(a, cfg):
-    now = parse_now(a.now)
-    today = to_eastern(now).date().isoformat()
+    p = market.from_config(cfg)
+    now = parse_now(a.now, p=p)
+    today = market.to_local(p, now).date().isoformat()
     plan = read_json(a.plan, "plan (run trader-exit first, or use --weights for a split)")
     limit = None
     if a.limit is not None:
@@ -834,7 +826,8 @@ def run_weights(a, cfg):
     result = size(rows, cfg, a.budget, prices, whole, a.cents, a.top)
     orders = orders_from(result, source)
     if a.write:
-        write_orders(a.write, orders, cfg, source, parse_now(a.now))
+        p = market.from_config(cfg)
+        write_orders(a.write, orders, cfg, source, parse_now(a.now, p=p))
     if a.json:
         print(json.dumps({"result": result, "orders": orders}, indent=2))
     else:
@@ -872,7 +865,7 @@ def main(argv=None):
         if a.top or a.whole_shares or a.cents:
             raise SizeError("--top, --whole-shares and --cents work with --weights or --targets")
         return run_plan(a, cfg)
-    except SizeError as e:
+    except (SizeError, ValueError) as e:
         print("size.py: %s" % e, file=sys.stderr)
         return 1
 

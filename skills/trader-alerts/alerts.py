@@ -57,43 +57,24 @@ import time
 import urllib.error
 import urllib.request
 
+_CORE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "trader-core"))
+if _CORE not in sys.path:
+    sys.path.insert(0, _CORE)
+import market  # noqa: E402
+
 UA = "Mozilla/5.0 (compatible; trader-skill-id/0.1; +https://github.com/Dhkysf/Trader-Skill-ID)"
 PAUSE = 0.5    # seconds between requests: be polite to free endpoints
 BACKOFF = 2.0  # seconds to wait before the one retry after a 429
 YAHOO_HOSTS = ("query2.finance.yahoo.com", "query1.finance.yahoo.com")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
-NYSE_HOLIDAYS = {
-    "2026-01-01": "New Year's Day",
-    "2026-01-19": "Martin Luther King, Jr. Day",
-    "2026-02-16": "Washington's Birthday",
-    "2026-04-03": "Good Friday",
-    "2026-05-25": "Memorial Day",
-    "2026-06-19": "Juneteenth National Independence Day",
-    "2026-07-03": "Independence Day (observed)",
-    "2026-09-07": "Labor Day",
-    "2026-11-26": "Thanksgiving Day",
-    "2026-12-25": "Christmas Day",
-    "2027-01-01": "New Year's Day",
-    "2027-01-18": "Martin Luther King, Jr. Day",
-    "2027-02-15": "Washington's Birthday",
-    "2027-03-26": "Good Friday",
-    "2027-05-31": "Memorial Day",
-    "2027-06-18": "Juneteenth National Independence Day (observed)",
-    "2027-07-05": "Independence Day (observed)",
-    "2027-09-06": "Labor Day",
-    "2027-11-25": "Thanksgiving Day",
-    "2027-12-24": "Christmas Day (observed)",
-}
-NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
-    "2026-11-27": "day after Thanksgiving",
-    "2026-12-24": "Christmas Eve",
-    "2027-11-26": "day after Thanksgiving",
-}
-CALENDAR_YEARS = (2026, 2027)
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
-EARLY = datetime.time(13, 0)
+_US = market.load("us")
+NYSE_HOLIDAYS = dict(_US["holidays"])
+NYSE_EARLY_CLOSE = dict(_US["early_close"]["dates"])
+CALENDAR_YEARS = tuple(_US["calendar_years"])
+OPEN = datetime.time.fromisoformat(_US["sessions"]["mon"][0][0])
+CLOSE = datetime.time.fromisoformat(_US["sessions"]["mon"][0][1])
+EARLY = datetime.time.fromisoformat(_US["early_close"]["time"])
 
 
 class AlertError(Exception):
@@ -102,36 +83,23 @@ class AlertError(Exception):
 
 # ---------------------------------------------------------------- time
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+_nth_sunday = market._nth_sunday
 
 
 def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+    """Hours from UTC for New York: -4 in daylight time, -5 otherwise."""
+    return market.utc_offset(_US, utc)
 
 
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    return market.to_local(_US, utc)
 
 
 def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+    return market.local_to_utc(_US, local)
 
 
-def parse_now(text):
+def parse_now(text, p=None):
     """ISO time -> naive UTC. A time without an offset is taken as New York time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
@@ -141,36 +109,41 @@ def parse_now(text):
     except ValueError:
         raise AlertError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return market.local_to_utc(p or _US, dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
 
 
 def trading_day(d):
     """(is_trading_day, reason). Weekends and the NYSE holiday list."""
-    if d.weekday() >= 5:
-        return False, "weekend"
+    if market.is_trading_day(_US, d):
+        return True, ""
     name = NYSE_HOLIDAYS.get(d.isoformat())
-    if name:
-        return False, "NYSE holiday: " + name
-    return True, ""
+    return False, ("NYSE holiday: " + name) if name else "weekend"
 
 
 def session(d):
     """(open_time, close_time) in New York time, or None if closed all day."""
-    ok, _ = trading_day(d)
-    if not ok:
-        return None
-    return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
+    s = market.sessions(_US, d)
+    return s[0] if s else None
 
 
-def market_status(now_utc):
-    local = to_eastern(now_utc)
+def market_status(now_utc, p=None):
+    p = p or _US
+    local = market.to_local(p, now_utc)
     d = local.date()
-    ok, reason = trading_day(d)
+    holidays = p.get("holidays", {})
+    early_dates = (p.get("early_close") or {}).get("dates", {})
+    cal_years = tuple(p.get("calendar_years", ()))
+    if market.is_trading_day(p, d):
+        reason = ""
+    else:
+        name = holidays.get(d.isoformat())
+        reason = ("%s holiday: %s" % (p.get("exchange", "NYSE"), name)) if name else "weekend"
     st = {"now_new_york": local.strftime("%Y-%m-%d %H:%M"), "date": d.isoformat(),
-          "weekday": local.strftime("%A"), "calendar_known": d.year in CALENDAR_YEARS,
-          "open": False, "reason": reason, "early_close": NYSE_EARLY_CLOSE.get(d.isoformat())}
-    s = session(d)
+          "weekday": local.strftime("%A"), "calendar_known": d.year in cal_years,
+          "open": False, "reason": reason, "early_close": early_dates.get(d.isoformat())}
+    sess = market.sessions(p, d)
+    s = sess[0] if sess else None
     if s:
         o, c = s
         st["opens"], st["closes"] = o.strftime("%H:%M"), c.strftime("%H:%M")
@@ -184,8 +157,9 @@ def market_status(now_utc):
     # next open
     nd = d if (s and local.time() < s[0]) else d + datetime.timedelta(days=1)
     for _ in range(15):
-        if session(nd):
-            st["next_open"] = "%s 09:30" % nd.isoformat()
+        ns = market.sessions(p, nd)
+        if ns:
+            st["next_open"] = "%s %s" % (nd.isoformat(), ns[0][0].strftime("%H:%M"))
             break
         nd += datetime.timedelta(days=1)
     return st
@@ -543,7 +517,8 @@ def _dedupe(items):
 
 
 def cmd_clock(a):
-    st = market_status(parse_now(a.now))
+    p = market.from_config(getattr(a, "config", None))
+    st = market_status(parse_now(a.now, p=p), p=p)
     if a.json:
         print(json.dumps(st, indent=2))
     else:
@@ -563,7 +538,8 @@ def cmd_quote(a):
     syms = _dedupe([s.upper() for s in a.symbols] + (holdings(a) if a.holdings else []))
     if not syms:
         raise AlertError("which tickers? alerts.py quote TSLA KO, or --holdings")
-    now = parse_now(a.now)
+    p = market.from_config(getattr(a, "config", None))
+    now = parse_now(a.now, p=p)
     quotes, errors = get_quotes(syms, a.source, a.offline)
     if a.write and quotes:
         write_prices(a.write, quotes, now, a.source)
@@ -590,8 +566,9 @@ def cmd_check(a):
     if not doc or not doc.get("rules"):
         raise AlertError("no rules in %s: add some with alerts.py add --from-plan" % a.rules)
     rules = doc["rules"]
-    now = parse_now(a.now)
-    status = market_status(now)
+    p = market.from_config(getattr(a, "config", None))
+    now = parse_now(a.now, p=p)
+    status = market_status(now, p=p)
     watched = [r for r in rules if active(r, status["date"])]
     syms = _dedupe([str(r.get("symbol", "")).upper() for r in watched if r.get("type") not in NO_QUOTE])
     quotes, errors = (get_quotes(syms, a.source, a.offline) if syms else ({}, []))
@@ -778,7 +755,7 @@ def main(argv=None):
     try:
         return {"clock": cmd_clock, "quote": cmd_quote, "check": cmd_check, "add": cmd_add,
                 "list": cmd_list, "reset": cmd_reset}[a.cmd](a)
-    except AlertError as e:
+    except (AlertError, ValueError) as e:
         print("alerts.py: %s" % e, file=sys.stderr)
         return 1
 

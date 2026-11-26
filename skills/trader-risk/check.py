@@ -67,6 +67,11 @@ import os
 import re
 import sys
 
+_CORE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "trader-core"))
+if _CORE not in sys.path:
+    sys.path.insert(0, _CORE)
+import market  # noqa: E402
+
 DEFAULTS = {
     "budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order_usd": 4000,
     "min_order_usd": 5, "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150, "max_trades_per_day": 3,
@@ -91,37 +96,13 @@ FRESH_MINUTES = 15
 REF_WORDS = {"plan": "the plan's entry", "price": "the latest price", "limit": "the limit price",
              "stop price": "the stop price", "stale price": "an old price"}
 
-NYSE_HOLIDAYS = {
-    "2026-01-01": "New Year's Day",
-    "2026-01-19": "Martin Luther King, Jr. Day",
-    "2026-02-16": "Washington's Birthday",
-    "2026-04-03": "Good Friday",
-    "2026-05-25": "Memorial Day",
-    "2026-06-19": "Juneteenth National Independence Day",
-    "2026-07-03": "Independence Day (observed)",
-    "2026-09-07": "Labor Day",
-    "2026-11-26": "Thanksgiving Day",
-    "2026-12-25": "Christmas Day",
-    "2027-01-01": "New Year's Day",
-    "2027-01-18": "Martin Luther King, Jr. Day",
-    "2027-02-15": "Washington's Birthday",
-    "2027-03-26": "Good Friday",
-    "2027-05-31": "Memorial Day",
-    "2027-06-18": "Juneteenth National Independence Day (observed)",
-    "2027-07-05": "Independence Day (observed)",
-    "2027-09-06": "Labor Day",
-    "2027-11-25": "Thanksgiving Day",
-    "2027-12-24": "Christmas Day (observed)",
-}
-NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
-    "2026-11-27": "day after Thanksgiving",
-    "2026-12-24": "Christmas Eve",
-    "2027-11-26": "day after Thanksgiving",
-}
-CALENDAR_YEARS = (2026, 2027)
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
-EARLY = datetime.time(13, 0)
+_US = market.load("us")
+NYSE_HOLIDAYS = dict(_US["holidays"])
+NYSE_EARLY_CLOSE = dict(_US["early_close"]["dates"])
+CALENDAR_YEARS = tuple(_US["calendar_years"])
+OPEN = datetime.time.fromisoformat(_US["sessions"]["mon"][0][0])
+CLOSE = datetime.time.fromisoformat(_US["sessions"]["mon"][0][1])
+EARLY = datetime.time.fromisoformat(_US["early_close"]["time"])
 
 
 class RiskError(Exception):
@@ -130,36 +111,23 @@ class RiskError(Exception):
 
 # ---------------------------------------------------------------- time (New York, no tz files)
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+_nth_sunday = market._nth_sunday
 
 
 def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+    """Hours from UTC for New York: -4 in daylight time, -5 otherwise."""
+    return market.utc_offset(_US, utc)
 
 
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    return market.to_local(_US, utc)
 
 
 def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+    return market.local_to_utc(_US, local)
 
 
-def parse_now(text):
+def parse_now(text, p=None):
     """ISO time -> naive UTC. A time without an offset is taken as New York time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
@@ -169,7 +137,7 @@ def parse_now(text):
     except ValueError:
         raise RiskError("--now wants a time like \"2026-10-19 10:15\" (New York) or ...Z (UTC)")
     if dt.tzinfo is None:
-        return eastern_to_utc(dt)
+        return market.local_to_utc(p or _US, dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
 
 
@@ -187,12 +155,10 @@ def parse_utc(text):
 
 def trading_day(d):
     """(is_trading_day, reason). Weekends and the NYSE holiday list."""
-    if d.weekday() >= 5:
-        return False, "weekend"
+    if market.is_trading_day(_US, d):
+        return True, ""
     name = NYSE_HOLIDAYS.get(d.isoformat())
-    if name:
-        return False, "NYSE holiday: " + name
-    return True, ""
+    return False, ("NYSE holiday: " + name) if name else "weekend"
 
 
 def hhmm(value, key):
@@ -216,23 +182,29 @@ def window_check(now_et, c):
     after = hhmm(c.get("no_entries_after"), "no_entries_after")
     if before is None and after is None:
         return [], []
+    p = market.from_config(c)
+    cal_years = tuple(p.get("calendar_years", ()))
+    holidays = p.get("holidays", {})
+    early_dates = (p.get("early_close") or {}).get("dates", {})
     warns = []
     d, t = now_et.date(), now_et.time().replace(second=0, microsecond=0)
-    if d.year not in CALENDAR_YEARS:
+    if cal_years and d.year not in cal_years:
         warns.append("the holiday list covers %s only: check nyse.com for %s"
-                     % (" and ".join(map(str, CALENDAR_YEARS)), d.isoformat()))
-    ok, why = trading_day(d)
+                     % (" and ".join(map(str, cal_years)), d.isoformat()))
     stamp = now_et.strftime("%a %Y-%m-%d %H:%M")
-    if not ok:
+    if not market.is_trading_day(p, d):
+        name = holidays.get(d.isoformat())
+        why = ("%s holiday: %s" % (p.get("exchange", "NYSE"), name)) if name else "weekend"
         return ["window: the market is closed today (%s, %s New York)" % (why, stamp)], warns
-    close = EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE
-    if t < OPEN or now_et.time() >= close:
+    sess = market.sessions(p, d)
+    o, close = sess[0]
+    if t < o or now_et.time() >= close:
         return ["window: the market is closed (%s New York; the session is %s to %s)"
-                % (stamp, OPEN.strftime("%H:%M"), close.strftime("%H:%M"))], warns
-    if close == EARLY and after is not None:
+                % (stamp, o.strftime("%H:%M"), close.strftime("%H:%M"))], warns
+    if d.isoformat() in early_dates and after is not None:
         after = _shift(after, 3)
         warns.append("early close at 1:00 p.m. today (%s): no new entries after %s"
-                     % (NYSE_EARLY_CLOSE[d.isoformat()], after.strftime("%H:%M")))
+                     % (early_dates[d.isoformat()], after.strftime("%H:%M")))
     if before is not None and t < before:
         return ["window: no new entries before %s New York (it is %s)" % (before.strftime("%H:%M"),
                                                                           t.strftime("%H:%M"))], warns
@@ -242,11 +214,12 @@ def window_check(now_et, c):
     return [], warns
 
 
-def business_days(today, n=5):
+def business_days(today, n=5, p=None):
     """The last n NYSE trading days up to and including today, newest first."""
+    p = p or _US
     out, d = [], today
     for _ in range(40):
-        if trading_day(d)[0]:
+        if market.is_trading_day(p, d):
             out.append(d.isoformat())
             if len(out) == n:
                 break
@@ -282,8 +255,8 @@ def _f(x):
         return None
 
 
-def money(x):
-    return "$" + "{:,.2f}".format(float(x)).replace(".00", "")
+def money(x, p=None):
+    return market.money(p or _US, x)
 
 
 def _cent(x):
@@ -295,7 +268,7 @@ def _p(x):
     return "%.2f" % float(x)
 
 
-def account(cfg, portfolio, prices):
+def account(cfg, portfolio, prices, p=None):
     """Starting account: cash and position values. No portfolio = a fresh
     account funded with the budget."""
     warnings = []
@@ -322,7 +295,7 @@ def account(cfg, portfolio, prices):
         else:
             basis = sum(_f(l.get("cost")) or 0 for l in p.get("lots", []))
             values[t] = basis
-            warnings.append("no price for %s: valued at its cost basis %s" % (t, money(basis)))
+            warnings.append("no price for %s: valued at its cost basis %s" % (t, money(basis, p)))
     return {"cash": cash, "shares": shares, "values": values}, warnings
 
 
@@ -347,11 +320,11 @@ def placed_today(state, today):
     return out
 
 
-def day_trades(state, today):
+def day_trades(state, today, p=None):
     """Day trades in the last 5 business days: a (day, symbol) with both a buy
     and a sell placed or filled that day. An entry placed today counts too: it
     is meant to be flat by the close. Returns (count, sorted list of "day SYM")."""
-    days = set(business_days(datetime.date.fromisoformat(today)))
+    days = set(business_days(datetime.date.fromisoformat(today), p=p))
     sides = {}
     for rec in (state or {}).get("orders", []):
         if rec.get("status") not in ("placed", "filled"):
@@ -377,11 +350,12 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     c = dict(DEFAULTS)
     c.update(cfg or {})
+    p = market.from_config(c)
     prices = {str(k).upper(): float(v) for k, v in (prices or {}).items() if _f(v)}
-    now_utc = now or parse_now(None)
-    now_et = to_eastern(now_utc)
+    now_utc = now or parse_now(None, p=p)
+    now_et = market.to_local(p, now_utc)
     today = today or now_et.date().isoformat()
-    acct, top_warn = account(c, portfolio, prices)
+    acct, top_warn = account(c, portfolio, prices, p=p)
     blocked = {str(b).upper() for b in c.get("blocked") or []}
     done_today = placed_today(state, today)
     count_today = len(done_today)
@@ -396,7 +370,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             loss_today += ml
     placed_keys = {(str(r.get("symbol", "")).upper(), r.get("side")) for r in done_today}
     win_reasons, win_warns = window_check(now_et, c)
-    pdt_n, pdt_list = day_trades(state, today) if c.get("pdt_guard") else (0, [])
+    pdt_n, pdt_list = day_trades(state, today, p=p) if c.get("pdt_guard") else (0, [])
     seen = set()
     results = []
     batch_entries, batch_loss = 0, 0.0
@@ -780,14 +754,15 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     try:
-        now = parse_now(a.now)
+        cfg = read_json(a.config, "config", required=False) or {}
+        p = market.from_config(cfg)
+        now = parse_now(a.now, p=p)
         if a.today and not re.match(r"^\d{4}-\d{2}-\d{2}$", a.today):
             raise RiskError("--today wants a date like 2026-10-19")
         doc = read_json(a.orders, "orders file (run trader-budget first)")
         orders = doc.get("orders", doc) if isinstance(doc, dict) else doc
         if not isinstance(orders, list) or not orders:
             raise RiskError("no orders in %s" % a.orders)
-        cfg = read_json(a.config, "config", required=False) or {}
         portfolio = read_json(a.portfolio, "portfolio", required=False)
         pdoc = read_json(a.prices, "prices", required=False) or {}
         prices, times = load_prices(pdoc)
@@ -808,7 +783,7 @@ def main(argv=None):
                 json.dump(rec, fh, indent=2)
                 fh.write("\n")
             os.replace(tmp, a.out)
-    except RiskError as e:
+    except (RiskError, ValueError) as e:
         print("check.py: %s" % e, file=sys.stderr)
         return 1
     print(json.dumps(res, indent=2) if a.json else report(res))

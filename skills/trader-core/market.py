@@ -132,3 +132,32 @@ def round_tick(p, price, mode="nearest"):
         d = Decimal(str(price))
     step = Decimal(str(p["tick"]))
     return (d / step).to_integral_value(rounding=rounding) * step
+
+
+_CURRENCY_PREFIX = {"USD": "$"}
+
+
+def from_config(cfg_or_path=None):
+    """Load the market profile named in a config dict or JSON file (default: 'us')."""
+    if isinstance(cfg_or_path, dict):
+        return load(cfg_or_path.get("market") or "us")
+    path = cfg_or_path or "trader/config.json"
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if isinstance(doc, dict):
+            return load(doc.get("market") or "us")
+    return load("us")
+
+
+def money(p, amount):
+    """Format `amount` using profile `p`'s currency."""
+    val = float(amount)
+    s = "{:,.2f}".format(val)
+    if s.endswith(".00"):
+        s = s[:-3]
+    if s == "-0":
+        s = "0"
+    ccy = (p or {}).get("currency", "USD")
+    prefix = _CURRENCY_PREFIX.get(ccy)
+    return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
