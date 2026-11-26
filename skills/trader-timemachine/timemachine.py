@@ -78,14 +78,23 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+_CORE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "trader-core"))
+if _CORE not in sys.path:
+    sys.path.insert(0, _CORE)
+import market  # noqa: E402
+
 UA = "Mozilla/5.0 (compatible; trader-skill-id/0.1; +https://github.com/Dhkysf/Trader-Skill-ID)"
 PAUSE = 0.5          # seconds between requests: be polite to free endpoints
 BACKOFF = 5.0        # seconds to wait once after a 429
 HOSTS = ("query2", "query1")
+_US = market.load("us")
+_OPEN_T = datetime.time.fromisoformat(_US["sessions"]["mon"][0][0])
+_CLOSE_T = datetime.time.fromisoformat(_US["sessions"]["mon"][0][1])
+_EARLY_T = datetime.time.fromisoformat(_US["early_close"]["time"])
 INTERVAL = 300       # 5-minute bars, in seconds
-SESSION_BARS = 78    # 9:30 to 16:00 in 5-minute bars
-OPEN_MIN = 9 * 60 + 30
-CLOSE_MIN = 16 * 60
+OPEN_MIN = _OPEN_T.hour * 60 + _OPEN_T.minute
+CLOSE_MIN = _CLOSE_T.hour * 60 + _CLOSE_T.minute
+SESSION_BARS = (CLOSE_MIN - OPEN_MIN) * 60 // INTERVAL    # 9:30 to 16:00 in 5-minute bars
 MIN_SESSIONS = 20
 SAMPLE_PATHS = 160
 BAND_PATHS = 2000
@@ -96,12 +105,8 @@ STRONG = 0.15
 MANY_NEITHER = 0.40
 EPOCH = datetime.datetime(1970, 1, 1)
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET, from https://www.nyse.com/markets/hours-calendars (read 2026-10-13)
-    "2026-11-27": "day after Thanksgiving",
-    "2026-12-24": "Christmas Eve",
-    "2027-11-26": "day after Thanksgiving",
-}
-EARLY_MIN = 13 * 60
+NYSE_EARLY_CLOSE = dict(_US["early_close"]["dates"])
+EARLY_MIN = _EARLY_T.hour * 60 + _EARLY_T.minute
 
 
 class TMError(Exception):
@@ -110,33 +115,20 @@ class TMError(Exception):
 
 # ---------------------------------------------------------------- time (copied from trader-alerts)
 
-def _nth_sunday(year, month, n):
-    d = datetime.date(year, month, 1)
-    d += datetime.timedelta(days=(6 - d.weekday()) % 7)
-    return d + datetime.timedelta(weeks=n - 1)
+_nth_sunday = market._nth_sunday
 
 
 def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise.
-    DST runs from 2:00 a.m. on the second Sunday of March to 2:00 a.m. on the
-    first Sunday of November (US rule since 2007)."""
-    y = utc.year
-    start = datetime.datetime.combine(_nth_sunday(y, 3, 2), datetime.time(7, 0))   # 2:00 EST
-    end = datetime.datetime.combine(_nth_sunday(y, 11, 1), datetime.time(6, 0))    # 2:00 EDT
-    naive = utc.replace(tzinfo=None)
-    return -4 if start <= naive < end else -5
+    """Hours from UTC for New York: -4 in daylight time, -5 otherwise."""
+    return market.utc_offset(_US, utc)
 
 
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    return market.to_local(_US, utc)
 
 
 def eastern_to_utc(local):
-    for off in (-4, -5):
-        utc = local - datetime.timedelta(hours=off)
-        if eastern_offset(utc) == off:
-            return utc
-    return local + datetime.timedelta(hours=5)
+    return market.local_to_utc(_US, local)
 
 
 def parse_now(text):
