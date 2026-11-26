@@ -21,10 +21,12 @@ entry = load("trader-entry", "entry")
 exitp = load("trader-exit", "exit")
 alerts = load("trader-alerts", "alerts")
 tm = load("trader-timemachine", "timemachine")
+size = load("trader-budget", "size")
 
 IDX_FIX = os.path.join(FIX, "idx")
 BBCA_5M = os.path.join(IDX_FIX, "BBCA.JK-5m-60d-2026-11-27.json.gz")
 SPARK_DAILY = os.path.join(IDX_FIX, "spark-daily-2026-11-27.json.gz")
+BBCA_PLAN = os.path.join(IDX_FIX, "plan-bbca.json")
 DELAY_MSG = "IDX data from Yahoo is about 10 minutes late. Check your broker app before acting."
 
 
@@ -148,7 +150,7 @@ class IdxScannerTest(unittest.TestCase):
         ])
         self.assertIn(code, (0, 1))
         self.assertIn(DELAY_MSG, out)
-        self.assertIn("IDR 5,000,000,000+ traded value", out)
+        self.assertIn("Rp 5.000.000.000+ traded value", out)
         with open(out_wl, encoding="utf-8") as fh:
             doc = json.load(fh)
         self.assertEqual(doc["delay_notice"], DELAY_MSG)
@@ -547,6 +549,81 @@ class IdxTimeMachineTest(unittest.TestCase):
         doc_fri = tm.time_machine(self.bbca_text, fri_p, tm.parse_now("2026-11-20 16:00", p=self.idx),
                                   replays=200, seed=19, p=self.idx)
         self.assertEqual(doc_fri["mc"]["bars_left"], 47)
+
+
+class IdxBudgetTest(unittest.TestCase):
+    """Offline BBCA plan tests for IDX lot rounding, fees, and Rp formatting (rules checked 2026-11-27)."""
+
+    def setUp(self):
+        with open(BBCA_PLAN, encoding="utf-8") as fh:
+            self.plan = json.load(fh)
+
+    def _run_size(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = size.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_lot_rounding_3_7_lots_to_3_lots_and_rp_formatting(self):
+        cfg = {"market": "idx", "budget": 3653750, "cash_buffer_pct": 0, "max_position_pct": 100}
+        s = size.size_trade(self.plan, cfg, today="2026-11-23")
+        self.assertEqual((s["qty"], s["lots"], s["cost"], s["max_loss"]), (300, 3, 2962500.0, 64218.75))
+        self.assertIsNone(s["refusal"])
+        order = size.bracket_order(s)
+        self.assertEqual(order["qty"], "300")
+        self.assertEqual(order["market"], "idx")
+        self.assertIn("3 lots (300 shares)", order["why"])
+        self.assertIn("Rp 64.219", order["why"])
+        rep = size.plan_report(s, order)
+        self.assertIn("Rp 2.962.500", rep)
+        self.assertIn("Rp 9.875", rep)
+        self.assertIn("Rp 64.219", rep)
+        self.assertIn("3 lots (300 shares)", rep)
+        self.assertNotIn("place_stock_order", rep)
+
+    def test_under_one_lot_refused(self):
+        s_cash = size.size_trade(self.plan, {"market": "idx", "budget": 900000, "cash_buffer_pct": 0,
+                                             "max_position_pct": 100}, today="2026-11-23")
+        self.assertEqual(s_cash["qty"], 0)
+        self.assertIn("1 lot", s_cash["refusal"])
+        self.assertIsNone(size.bracket_order(s_cash))
+
+        s_loss = size.size_trade(self.plan, {"market": "idx", "budget": 10000000, "max_loss_per_trade": 15000},
+                                 today="2026-11-23")
+        self.assertEqual(s_loss["qty"], 0)
+        self.assertIn("1 lot", s_loss["refusal"])
+        self.assertIsNone(size.bracket_order(s_loss))
+
+    def test_fee_inclusive_max_loss_and_override(self):
+        # 3 lots price-only loss = 300 * 175 = Rp 52.500 (<= 60.000), but incl. fees = Rp 64.219 (> 60.000) -> 2 lots
+        cfg = {"market": "idx", "budget": 10000000, "max_loss_per_trade": 60000}
+        s = size.size_trade(self.plan, cfg, today="2026-11-23")
+        self.assertEqual((s["qty"], s["lots"], s["max_loss"]), (200, 2, 42812.5))
+
+        # Overriding fees to 0% allows 3 lots
+        s_nofee = size.size_trade(self.plan, dict(cfg, buy_fee_pct=0, sell_fee_pct=0), today="2026-11-23")
+        self.assertEqual((s_nofee["qty"], s_nofee["lots"], s_nofee["max_loss"]), (300, 3, 52500.0))
+
+    def test_cli_writes_idx_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            out_p = os.path.join(d, "orders.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 75000}, fh)
+            code, out, err = self._run_size([
+                "--plan", BBCA_PLAN, "--config", cfg_p, "--portfolio", os.path.join(d, "none"),
+                "--now", "2026-11-23 09:30", "--write", out_p,
+            ])
+            self.assertEqual(code, 0, err)
+            self.assertIn("Rp 64.219", out)
+            with open(out_p, encoding="utf-8") as fh:
+                doc = json.load(fh)
+            self.assertEqual(doc["orders"][0]["qty"], "300")
+            self.assertEqual(doc["orders"][0]["market"], "idx")
+
+
+class IdxTimeMachineRestTest(IdxTimeMachineTest):
+    pass
 
     def test_determinism_and_us_tsla_reproduction(self):
         now_u = tm.parse_now("2026-11-26 16:00", p=self.idx)

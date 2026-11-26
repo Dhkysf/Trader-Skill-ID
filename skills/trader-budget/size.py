@@ -53,6 +53,7 @@ Money that cannot be invested is reported as "left idle", never hidden.
 
 import argparse
 import datetime
+from decimal import Decimal, ROUND_HALF_UP
 import json
 import math
 import os
@@ -162,9 +163,26 @@ def read_json(path, what):
         raise SizeError("%s is not valid JSON: %s" % (path, e))
 
 
+def _place_label(p):
+    return "New York" if (p or _US).get("id") == "us" else ((p or _US).get("tz_label") or (p or _US).get("timezone") or "local")
+
+
+def _defaults_for(p):
+    d = dict(DEFAULTS)
+    if p and p.get("id") != "us":
+        for k in ("max_order", "min_order", "max_loss_per_trade", "max_daily_loss"):
+            d[k] = None
+        for k, v in (p.get("defaults") or {}).items():
+            if k in d and v is not None:
+                d[k] = v
+        d["broker"] = "manual"
+    return d
+
+
 def load_config(path):
     raw = read_json(path, "config") if (path and os.path.exists(path)) else {}
-    return market.merge_config(raw, DEFAULTS)[0]
+    p = market.from_config(raw)
+    return market.merge_config(raw, _defaults_for(p))[0]
 
 
 def _f(x):
@@ -265,8 +283,14 @@ def round_cent(x):
     return math.floor(float(x) * 100 + 0.5 + EPS) / 100.0
 
 
-def shares_for(usd, per_share):
-    """Whole shares that fit in usd at per_share, in exact integer cents."""
+def shares_for(usd, per_share, lot=1):
+    """Whole shares that fit in usd at per_share, in exact integer cents (or whole lots when lot > 1)."""
+    if int(lot) > 1:
+        u = market._to_decimal(usd)
+        per = market._to_decimal(per_share) * int(lot)
+        if per <= 0 or u <= 0:
+            return 0
+        return int(u // per) * int(lot)
     u, p = int(round(float(usd) * 100)), int(round(float(per_share) * 100))
     if p <= 0 or u <= 0:
         return 0
@@ -276,6 +300,17 @@ def shares_for(usd, per_share):
 def _price(x):
     """358.32 -> "358.32": Alpaca wants prices as strings."""
     return "%.2f" % round_cent(x)
+
+
+def _px(x, p=None):
+    return _price(x) if (p or _US).get("id") == "us" else money(x, p)
+
+
+def _ord_price(x, p=None):
+    if (p or _US).get("id") == "us":
+        return _price(x)
+    f = float(x)
+    return str(int(round(f))) if abs(f - round(f)) < 1e-9 else str(x)
 
 
 def _num(x):
@@ -299,8 +334,13 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     price  a FRESH latest price; a market order is sized at the higher of it and the plan's entry
     cash   the cash in trader/portfolio.json, if there is one
     today  New York date (YYYY-MM-DD); a plan for another day is refused"""
-    c, cfg_notices = market.merge_config(cfg, DEFAULTS)
-    p = market.from_config(c)
+    market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "us"
+    p = market.load(market_id)
+    is_us = p.get("id") == "us"
+    c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
+    lot = int(p.get("lot", 1))
+    buy_fee_pct, sell_fee_pct = market.fees(p, c)
+    has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
     if not isinstance(plan, dict):
         raise SizeError("the plan is not a JSON object")
     sym = str(plan.get("symbol") or "").strip().upper()
@@ -310,8 +350,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if side != "buy":
         raise SizeError("this pack sizes long (buy) day trades only; the plan says %r" % side)
     if today and plan.get("date") and str(plan["date"]) != today:
-        raise SizeError("the plan is for %s and today is %s in New York: make a new plan with trader-exit"
-                        % (plan["date"], today))
+        where = "in New York" if is_us else ("(%s)" % _place_label(p))
+        raise SizeError("the plan is for %s and today is %s %s: make a new plan with trader-exit"
+                        % (plan["date"], today, where))
     entry_plan, stop, target = _f(plan.get("entry")), _f(plan.get("stop")), _f(plan.get("target"))
     for name, v in (("entry", entry_plan), ("stop", stop), ("target", target)):
         if v is None or v <= 0:
@@ -328,57 +369,84 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if not 0 <= buf_pct < 100:
         raise SizeError("cash_buffer_pct must be between 0 and 100")
 
+    _norm = round_cent if is_us else (lambda x: float(x))
     if limit is not None:
-        ref, ref_from = round_cent(limit), "limit"
-    elif price is not None and round_cent(price) > round_cent(entry_plan):
-        ref, ref_from = round_cent(price), "price"
+        ref, ref_from = _norm(limit), "limit"
+    elif price is not None and _norm(price) > _norm(entry_plan):
+        ref, ref_from = _norm(price), "price"
     else:
-        ref, ref_from = round_cent(entry_plan), "plan"
-    stop, target = round_cent(stop), round_cent(target)
+        ref, ref_from = _norm(entry_plan), "plan"
+    stop, target = _norm(stop), _norm(target)
     if stop >= ref:
         raise SizeError("the stop %s is not below the entry %s; a long trade needs its stop underneath"
-                        % (_price(stop), _price(ref)))
+                        % (_px(stop, p), _px(ref, p)))
     if target <= ref:
         raise SizeError("the target %s is not above the entry %s: the move has already happened. "
-                        "Skip it or make a new plan with trader-exit" % (_price(target), _price(ref)))
+                        "Skip it or make a new plan with trader-exit" % (_px(target, p), _px(ref, p)))
     risk_c = int(round((ref - stop) * 100))
     reward_c = int(round((target - ref) * 100))
-    risk = risk_c / 100.0
+    risk = (risk_c / 100.0) if is_us else float(market._to_decimal(ref) - market._to_decimal(stop))
+    d_entry = market._to_decimal(ref)
+    d_stop = market._to_decimal(stop)
+    d_buy = market._to_decimal(buy_fee_pct) / Decimal("100")
+    d_sell = market._to_decimal(sell_fee_pct) / Decimal("100")
+    risk_per_share_net = (d_entry - d_stop) + d_entry * d_buy + d_stop * d_sell
 
     cash_buffer = round(budget * buf_pct / 100.0, 2)
     available = budget - cash_buffer
-    cash_note = "budget %s minus the %s cash buffer" % (money(budget), money(cash_buffer))
+    cash_note = "budget %s minus the %s cash buffer" % (money(budget, p), money(cash_buffer, p))
     if cash is not None and cash - cash_buffer < available - 0.005:
         available = cash - cash_buffer
-        cash_note = "cash %s in trader/portfolio.json minus the %s buffer" % (money(cash), money(cash_buffer))
+        cash_note = "cash %s in trader/portfolio.json minus the %s buffer" % (money(cash, p), money(cash_buffer, p))
     available = max(round(available, 2), 0.0)
 
     limits = []
     max_loss = _f(c.get("max_loss_per_trade"))
     if max_loss:
-        limits.append({"name": "max loss", "usd": max_loss, "per": risk, "shares": shares_for(max_loss, risk),
-                       "how": "%s max loss / %s risk a share" % (money(max_loss, p), _price(risk))})
+        per_loss = risk_per_share_net if has_fees else risk
+        if is_us and not has_fees:
+            how_loss = "%s max loss / %s risk a share" % (money(max_loss, p), _price(risk))
+        else:
+            per_lot_loss = per_loss * lot
+            how_loss = "%s max loss / %s per lot%s" % (
+                money(max_loss, p), money(per_lot_loss, p), " incl. fees" if has_fees else "")
+        limits.append({"name": "max loss", "usd": max_loss, "per": float(per_loss),
+                       "shares": shares_for(max_loss, per_loss, lot=lot), "how": how_loss})
     cap_pct = _f(c.get("max_position_pct"))
     if cap_pct:
         cap = round(budget * cap_pct / 100.0, 2)
-        limits.append({"name": "position cap", "usd": cap, "per": ref, "shares": shares_for(cap, ref),
-                       "how": "%s%% of %s = %s / %s" % (_num(cap_pct), money(budget, p), money(cap, p), _price(ref))})
+        limits.append({"name": "position cap", "usd": cap, "per": ref, "shares": shares_for(cap, ref, lot=lot),
+                       "how": "%s%% of %s = %s / %s" % (_num(cap_pct), money(budget, p), money(cap, p), _px(ref, p))})
     max_order = _f(c.get("max_order"))
     if max_order:
-        limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref),
-                       "how": "%s / %s" % (money(max_order, p), _price(ref))})
-    limits.append({"name": "cash", "usd": available, "per": ref, "shares": shares_for(available, ref),
-                   "how": "%s = %s / %s" % (cash_note, money(available, p), _price(ref))})
+        limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref, lot=lot),
+                       "how": "%s / %s" % (money(max_order, p), _px(ref, p))})
+    limits.append({"name": "cash", "usd": available, "per": ref, "shares": shares_for(available, ref, lot=lot),
+                   "how": "%s = %s / %s" % (cash_note, money(available, p), _px(ref, p))})
 
     qty = max(0, min(l["shares"] for l in limits))
     bound = [l["name"] for l in limits if l["shares"] == qty]
     for l in limits:
         l["binds"] = l["name"] == bound[0]
     cost = round(qty * ref, 2)
-    loss = round(qty * risk_c / 100.0, 2)
+    if has_fees:
+        loss = float((risk_per_share_net * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    else:
+        loss = round(qty * risk_c / 100.0, 2)
     refusal = None
     if qty == 0:
-        if bound[0] == "max loss":
+        if lot > 1:
+            if bound[0] == "max loss":
+                lot_risk = (risk_per_share_net if has_fees else market._to_decimal(risk)) * lot
+                refusal = ("1 lot (%d shares) risks %s%s (entry %s minus stop %s), more than your %s max loss "
+                           "per trade. No order. Skip this trade, or plan a closer stop with trader-exit."
+                           % (lot, money(lot_risk, p), " incl. fees" if has_fees else "",
+                              _px(ref, p), _px(stop, p), money(max_loss, p)))
+            else:
+                refusal = ("1 lot (%d shares) of %s costs %s, more than your %s limit (%s). No order."
+                           % (lot, sym, money(ref * lot, p), bound[0],
+                              limits[[l["name"] for l in limits].index(bound[0])]["how"]))
+        elif bound[0] == "max loss":
             refusal = ("one share risks %s (entry %s minus stop %s), more than your %s max loss per trade. "
                        "No order. Skip this trade, or plan a closer stop with trader-exit."
                        % (money(risk), _price(ref), _price(stop), money(max_loss)))
@@ -388,13 +456,13 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     elif _f(c.get("min_reward_risk")) and reward_c < _f(c["min_reward_risk"]) * risk_c - EPS:
         refusal = ("reward:risk %.2f (target %s, entry %s, stop %s) is under your minimum %s, so trader-risk "
                    "would block it. No order. Skip it, or make a new plan with trader-exit."
-                   % (reward_c / float(risk_c), _price(target), _price(ref), _price(stop), _num(c["min_reward_risk"])))
+                   % (reward_c / float(risk_c), _px(target, p), _px(ref, p), _px(stop, p), _num(c["min_reward_risk"])))
     elif cost < float(c.get("min_order") or 0) - 0.005:
         refusal = ("%d share%s of %s is %s, under your %s minimum order. No order."
                    % (qty, "" if qty == 1 else "s", sym, money(cost, p), money(c["min_order"], p)))
-    return {
+    out = {
         "symbol": sym, "side": "buy", "setup": plan.get("setup", ""), "date": plan.get("date"),
-        "entry_time": plan.get("entry_time", ""), "entry_plan": round_cent(entry_plan),
+        "entry_time": plan.get("entry_time", ""), "entry_plan": _norm(entry_plan),
         "entry": ref, "entry_from": ref_from, "stop": stop, "target": target,
         "risk_per_share": risk, "reward_risk": round(reward_c / float(risk_c), 2),
         "stop_label": plan.get("stop_label", ""), "target_label": plan.get("target_label", ""),
@@ -404,72 +472,117 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         "order_type": "limit" if limit is not None else "market", "refusal": refusal,
         "notices": cfg_notices,
     }
+    if not is_us:
+        out.update({"market": p["id"], "lot": lot, "lots": qty // lot,
+                    "buy_fee_pct": buy_fee_pct, "sell_fee_pct": sell_fee_pct})
+        if plan.get("prev_close") is not None:
+            out["prev_close"] = _f(plan.get("prev_close"))
+    return out
 
 
 def bracket_order(s):
     """The one proposed order, Alpaca place_stock_order fields (strings) plus why and plan."""
     if s["refusal"] or s["qty"] <= 0:
         return None
+    is_us = s.get("market") in (None, "us")
+    p = _US if is_us else market.load(s["market"])
     o = {"symbol": s["symbol"], "side": "buy", "qty": str(int(s["qty"])), "type": s["order_type"],
          "time_in_force": "day"}
     if s["order_type"] == "limit":
-        o["limit_price"] = _price(s["entry"])
+        o["limit_price"] = _ord_price(s["entry"], p)
     setup = SETUP_WORDS.get(s["setup"], s["setup"] or "day trade")
-    why = ("%s on %s: %d shares, bound by your %s (%d x %s = %s at the stop)"
-           % (setup, s["symbol"], s["qty"], {"max loss": "%s max loss per trade" % money(s["max_loss_per_trade_usd"] or 0),
-                                             "position cap": "position cap", "max order": "max order",
-                                             "cash": "cash after the buffer"}[s["bound_by"]],
-              s["qty"], _price(s["risk_per_share"]), money(s["max_loss"])))
+    bound_text = {"max loss": "%s max loss per trade" % money(s["max_loss_per_trade_usd"] or 0, p),
+                  "position cap": "position cap", "max order": "max order",
+                  "cash": "cash after the buffer"}[s["bound_by"]]
+    if is_us:
+        why = ("%s on %s: %d shares, bound by your %s (%d x %s = %s at the stop)"
+               % (setup, s["symbol"], s["qty"], bound_text, s["qty"], _price(s["risk_per_share"]),
+                  money(s["max_loss"])))
+    else:
+        lot = int(p.get("lot", 1))
+        lots = s["qty"] // lot
+        fee_note = " incl. fees" if (s.get("buy_fee_pct") or s.get("sell_fee_pct")) else ""
+        why = ("%s on %s: %d lot%s (%d shares), bound by your %s (max loss%s %s at the stop)"
+               % (setup, s["symbol"], lots, "" if lots == 1 else "s", s["qty"], bound_text,
+                  fee_note, money(s["max_loss"], p)))
+        o["market"] = p["id"]
+    plan_info = {"entry": s["entry"], "stop": s["stop"], "target": s["target"],
+                 "risk_per_share": s["risk_per_share"], "max_loss": s["max_loss"], "setup": s["setup"],
+                 "entry_time": s["entry_time"], "flat_by": s["flat_by"]}
+    if not is_us and s.get("prev_close") is not None:
+        plan_info["prev_close"] = s["prev_close"]
     o.update({
         "order_class": "bracket",
-        "take_profit_limit_price": _price(s["target"]),
-        "stop_loss_stop_price": _price(s["stop"]),
+        "take_profit_limit_price": _ord_price(s["target"], p),
+        "stop_loss_stop_price": _ord_price(s["stop"], p),
         "why": why,
-        "plan": {"entry": s["entry"], "stop": s["stop"], "target": s["target"],
-                 "risk_per_share": s["risk_per_share"], "max_loss": s["max_loss"], "setup": s["setup"],
-                 "entry_time": s["entry_time"], "flat_by": s["flat_by"]},
+        "plan": plan_info,
     })
     return o
 
 
 def plan_report(s, order, notes=()):
+    is_us = s.get("market") in (None, "us")
+    p = _US if is_us else market.load(s["market"])
+    lot = int(p.get("lot", 1))
+    has_fees = bool(s.get("buy_fee_pct") or s.get("sell_fee_pct"))
     lines = []
     setup = SETUP_WORDS.get(s["setup"], s["setup"] or "setup")
-    lines.append("%s buy, %s, entry %s%s" % (s["symbol"], setup, _price(s["entry_plan"]),
+    lines.append("%s buy, %s, entry %s%s" % (s["symbol"], setup, _px(s["entry_plan"], p),
                                             (" at " + s["entry_time"]) if s["entry_time"] else ""))
-    lines.append("Stop %s%s. Target %s%s." % (_price(s["stop"]), (": " + s["stop_label"]) if s["stop_label"] else "",
-                                             _price(s["target"]),
+    lines.append("Stop %s%s. Target %s%s." % (_px(s["stop"], p), (": " + s["stop_label"]) if s["stop_label"] else "",
+                                             _px(s["target"], p),
                                              (": " + s["target_label"]) if s["target_label"] else ""))
     for n in notes:
         lines.append(n)
     src = {"plan": "the plan's entry", "price": "the latest price, above the plan's entry",
            "limit": "your limit price"}[s["entry_from"]]
     lines.append("Sized at %s (%s). Risk %s a share (entry %s minus stop %s). Reward:risk %.2f."
-                 % (_price(s["entry"]), src, _price(s["risk_per_share"]), _price(s["entry"]), _price(s["stop"]),
+                 % (_px(s["entry"], p), src, _px(s["risk_per_share"], p), _px(s["entry"], p), _px(s["stop"], p),
                     s["reward_risk"]))
     lines.append("")
-    lines.append("Limits (whole shares; the smallest one wins):")
-    for l in s["limits"]:
-        lines.append("  %-13s %-58s %3d shares%s" % (l["name"], l["how"], l["shares"],
-                                                      "  <- binds" if l["binds"] else ""))
+    if is_us:
+        lines.append("Limits (whole shares; the smallest one wins):")
+        for l in s["limits"]:
+            lines.append("  %-13s %-58s %3d shares%s" % (l["name"], l["how"], l["shares"],
+                                                          "  <- binds" if l["binds"] else ""))
+    else:
+        lines.append("Limits (whole lots of %d shares; the smallest one wins):" % lot)
+        for l in s["limits"]:
+            lots_n = l["shares"] // lot
+            lines.append("  %-13s %-54s %3d lots (%d shares)%s"
+                         % (l["name"], l["how"], lots_n, l["shares"], "  <- binds" if l["binds"] else ""))
     lines.append("")
     if order is None:
         lines.append("No order: " + s["refusal"])
         lines.append("Education and tooling, not financial advice.")
         return "\n".join(lines)
-    lines.append("Size: %d shares of %s = %s at %s. Max loss at the stop: %d x %s = %s."
-                 % (s["qty"], s["symbol"], money(s["cost"]), _price(s["entry"]), s["qty"],
-                    _price(s["risk_per_share"]), money(s["max_loss"])))
-    lines.append("A stop is an order, not a promise: in a fast market it can fill below %s." % _price(s["stop"]))
+    if is_us:
+        lines.append("Size: %d shares of %s = %s at %s. Max loss at the stop: %d x %s = %s."
+                     % (s["qty"], s["symbol"], money(s["cost"]), _price(s["entry"]), s["qty"],
+                        _price(s["risk_per_share"]), money(s["max_loss"])))
+    else:
+        lots_n = s["qty"] // lot
+        fee_note = " incl. fees" if has_fees else ""
+        lines.append("Size: %d lot%s (%d shares) of %s = %s at %s. Max loss%s at the stop: %s."
+                     % (lots_n, "" if lots_n == 1 else "s", s["qty"], s["symbol"],
+                        money(s["cost"], p), _px(s["entry"], p), fee_note, money(s["max_loss"], p)))
+    lines.append("A stop is an order, not a promise: in a fast market it can fill below %s." % _px(s["stop"], p))
     lines.append("")
-    lines.append("Proposed bracket order (place_stock_order arguments, nothing has been placed):")
-    how = "limit %s" % order["limit_price"] if order["type"] == "limit" else "market"
-    lines.append("  buy %s %s, %s, day, take-profit %s, stop-loss %s"
-                 % (order["qty"], order["symbol"], how, order["take_profit_limit_price"],
-                    order["stop_loss_stop_price"]))
+    how = "limit %s" % _px(order["limit_price"], p) if order["type"] == "limit" else "market"
+    if is_us:
+        lines.append("Proposed bracket order (place_stock_order arguments, nothing has been placed):")
+        lines.append("  buy %s %s, %s, day, take-profit %s, stop-loss %s"
+                     % (order["qty"], order["symbol"], how, order["take_profit_limit_price"],
+                        order["stop_loss_stop_price"]))
+    else:
+        lines.append("Proposed manual IDX order (nothing has been placed):")
+        lines.append("  buy %d lots (%s shares) %s, %s, day, take-profit %s, stop-loss %s"
+                     % (s["qty"] // lot, order["qty"], order["symbol"], how,
+                        _px(order["take_profit_limit_price"], p), _px(order["stop_loss_stop_price"], p)))
     if s["flat_by"]:
-        lines.append("Flat by %s New York: anything still open then gets closed (trader-alerts rings, "
-                     "trader-broker flatten)." % s["flat_by"])
+        lines.append("Flat by %s %s: anything still open then gets closed (trader-alerts rings, "
+                     "trader-broker flatten)." % (s["flat_by"], _place_label(p)))
     lines.append("")
     lines.append("Next: trader-risk checks it, then trader-broker asks you yes or no.")
     lines.append("Education and tooling, not financial advice.")
@@ -783,16 +896,21 @@ def run_plan(a, cfg, cfg_notices=()):
     ppath = a.prices or ("trader/prices.json" if os.path.exists("trader/prices.json") else None)
     if ppath and limit is None and sym:
         pdoc = read_json(ppath, "prices")
-        p, t, fresh = fresh_price(pdoc, sym, now)
-        if p is not None and fresh:
-            price = p
-            if round_cent(p) > round_cent(_f(plan.get("entry")) or 0):
-                notes.append("%s last %s (as of %s New York) is above the plan's entry %s, so the risk "
-                             "is bigger: sized at %s." % (sym, _price(p), to_eastern(t).strftime("%H:%M"),
-                                                          _price(plan.get("entry")), _price(p)))
-        elif p is not None:
+        px, t, fresh = fresh_price(pdoc, sym, now)
+        if plan.get("prev_close") is None:
+            pc = ((pdoc.get("detail") or {}).get(sym) or {}).get("prev_close")
+            if pc is not None:
+                plan = dict(plan, prev_close=pc)
+        if px is not None and fresh:
+            price = px
+            if (round_cent(px) > round_cent(_f(plan.get("entry")) or 0) if p.get("id") == "us"
+                    else px > (_f(plan.get("entry")) or 0)):
+                notes.append("%s last %s (as of %s %s) is above the plan's entry %s, so the risk "
+                             "is bigger: sized at %s." % (sym, _px(px, p), market.to_local(p, t).strftime("%H:%M"),
+                                                          _place_label(p), _px(plan.get("entry"), p), _px(px, p)))
+        elif px is not None:
             notes.append("%s in %s is %s: not used (older than %d minutes). Sized at the plan's entry."
-                         % (sym, ppath, ("from " + to_eastern(t).strftime("%Y-%m-%d %H:%M") + " New York")
+                         % (sym, ppath, ("from " + market.to_local(p, t).strftime("%Y-%m-%d %H:%M") + " " + _place_label(p))
                             if t else "undated", FRESH_MINUTES))
     cash = None
     if a.portfolio and os.path.exists(a.portfolio):
@@ -864,7 +982,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         raw_cfg = read_json(a.config, "config") if (a.config and os.path.exists(a.config)) else {}
-        cfg, cfg_notices = market.merge_config(raw_cfg, DEFAULTS)
+        p = market.from_config(raw_cfg)
+        cfg, cfg_notices = market.merge_config(raw_cfg, _defaults_for(p))
         if a.weights or a.targets:
             return run_weights(a, cfg, cfg_notices)
         if a.top or a.whole_shares or a.cents:

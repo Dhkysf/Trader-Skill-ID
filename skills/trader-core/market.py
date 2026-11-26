@@ -233,15 +233,40 @@ def from_config(cfg_or_path=None):
 
 def money(p, amount):
     """Format `amount` using profile `p`'s currency."""
+    ccy = (p or {}).get("currency", "USD")
+    if ccy == "IDR":
+        n = int(_to_decimal(amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        if n == 0:
+            return "Rp 0"
+        sign = "-" if n < 0 else ""
+        return "%sRp %s" % (sign, "{:,}".format(abs(n)).replace(",", "."))
     val = float(amount)
     s = "{:,.2f}".format(val)
     if s.endswith(".00"):
         s = s[:-3]
     if s == "-0":
         s = "0"
-    ccy = (p or {}).get("currency", "USD")
     prefix = _CURRENCY_PREFIX.get(ccy)
     return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
+
+
+def fees(p, cfg=None):
+    """Return (buy_fee_pct, sell_fee_pct) as floats from profile `p`, overridden by `cfg`."""
+    pf = (p or {}).get("fees") or {}
+    c = cfg or {}
+    cf = c.get("fees") if isinstance(c.get("fees"), dict) else {}
+    out = []
+    for key in ("buy_fee_pct", "sell_fee_pct"):
+        val = None
+        for src in (c, cf, pf):
+            if src.get(key) is not None:
+                val = float(src[key])
+                break
+        val = 0.0 if val is None else val
+        if val < 0:
+            raise ValueError("%s must be >= 0, got %r" % (key, val))
+        out.append(val)
+    return out[0], out[1]
 
 
 MONEY_LIMIT_ALIASES = (

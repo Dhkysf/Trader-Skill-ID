@@ -134,7 +134,18 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(market.money(us, 0), "$0")
         self.assertEqual(market.money(us, -0.001), "$0")
         self.assertEqual(market.money(us, -50), "$-50")
-        self.assertEqual(market.money({"currency": "IDR"}, 15000), "IDR 15,000")
+        idx = market.load("idx")
+        self.assertEqual(market.money(idx, 15000), "Rp 15.000")
+        self.assertEqual(market.money(idx, 9875000), "Rp 9.875.000")
+        self.assertEqual(market.money(idx, 64218.75), "Rp 64.219")
+        self.assertEqual(market.money(idx, 0), "Rp 0")
+        self.assertEqual(market.money(idx, -0.001), "Rp 0")
+        self.assertEqual(market.money({"currency": "EUR"}, 15000), "EUR 15,000")
+        self.assertEqual(market.fees(us), (0.0, 0.0))
+        self.assertEqual(market.fees(idx), (0.15, 0.25))
+        self.assertEqual(market.fees(idx, {"buy_fee_pct": 0.1, "sell_fee_pct": 0.0}), (0.1, 0.0))
+        with self.assertRaises(ValueError):
+            market.fees(idx, {"buy_fee_pct": -0.1})
 
     def test_no_second_dst_implementation_in_skills(self):
         skills_dir = os.path.join(ROOT, "skills")

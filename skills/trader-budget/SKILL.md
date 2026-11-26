@@ -154,6 +154,18 @@ It never places, approves or schedules an order, never raises a limit on its
 own, never shrinks a stop to fit more shares, and never sizes options,
 margin or short positions.
 
+## IDX (Indonesian stocks)
+
+When `"market": "idx"` is set in `trader/config.json`:
+
+- Quantity is rounded down to whole lots of 100 shares. Under 1 lot (100 shares)
+  is refused with the reason.
+- Max loss per trade includes buy and sell broker fees from
+  `skills/trader-core/markets/idx.json` (default 0.15% buy, 0.25% sell;
+  overridable via `buy_fee_pct` / `sell_fee_pct` in `trader/config.json`).
+- Amounts are printed in Rupiah (`Rp 9.875.000`). Orders are manual (no
+  broker API).
+
 ## Safety
 
 - Education and tooling, not financial advice. A PASS is a rules check, not a recommendation.

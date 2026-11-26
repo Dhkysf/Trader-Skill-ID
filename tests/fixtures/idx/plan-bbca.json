@@ -1,0 +1,22 @@
+{
+  "created_by": "trader-exit",
+  "symbol": "BBCA",
+  "side": "buy",
+  "market": "idx",
+  "date": "2026-11-23",
+  "setup": "orb",
+  "entry": 9875.0,
+  "entry_time": "9:25 AM",
+  "entry_bar": 5,
+  "interval": "5m",
+  "stop": 9700.0,
+  "stop_rule": "price",
+  "stop_label": "your price",
+  "target": 10200.0,
+  "target_r": 1.86,
+  "target_label": "your price (1.86R)",
+  "risk_per_share": 175.0,
+  "reward_risk": 1.86,
+  "prev_close": 9800.0,
+  "flat_by": "15:45"
+}
