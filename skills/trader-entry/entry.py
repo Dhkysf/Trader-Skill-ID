@@ -2,36 +2,34 @@
 """Entry Timer for trader-entry: watches a setup bar by bar and says the
 moment to get in. Standard library only. Long side only. It never places an order.
 
-    python3 entry.py check TSLA                          # opening-range breakout, 5-minute bars
-    python3 entry.py check TSLA --now "2026-10-19 10:15" --offline TSLA.json
-    python3 entry.py check TSLA --setup level --level 371.20    # first close above a price
-    python3 entry.py check TSLA --interval 1m --min-volume-x 1.5 --write
-    python3 entry.py watch TSLA --every 30 --until 15:30  # one line per closed bar
-    python3 entry.py watchlist                            # every hit in trader/watchlist.json
+    python entry.py check BBCA                          # opening-range breakout, 5-minute bars
+    python entry.py check BBCA --now "2026-11-23 09:35" --offline BBCA.JK.json.gz
+    python entry.py check BBCA --setup level --level 5540     # first close above a price
+    python entry.py check BBCA --interval 1m --min-volume-x 1.5 --write
+    python entry.py watch BBCA --every 30 --until 15:30 # one line per closed bar
+    python entry.py watchlist                           # every hit in trader/watchlist.json
 
 Setups (v2 plans longs only):
   orb    opening-range breakout. The range is the high and low of the first
-         --or-minutes (default 15: the 9:30, 9:35 and 9:40 five-minute bars).
+         --or-minutes (default 15: the 09:00, 09:05 and 09:10 five-minute bars).
          It triggers on the first COMPLETED bar after the range that CLOSES
          above the range high. A wick above the high is not a trigger.
   level  the first completed bar that closes above --level (for example a
          20-day high from trader-scanner).
   --min-volume-x X  the trigger bar also needs at least X times the average
-         volume of the opening-range bars (the 9:30 bar carries the opening
-         auction, so 1.0 is already a high bar).
+         volume of the opening-range bars.
 
-A trigger's time is the trigger bar's CLOSE time (the 10:10 bar closes at
-10:15 AM) and its price is that close, to the cent. Only bars on the interval
+A trigger's time is the trigger bar's CLOSE time (the 09:30 bar closes at
+9:35 AM) and its price is that close. Only bars on the interval
 grid count (Yahoo's live tick, e.g. 10:49:45, is dropped) and a bar counts only
 once it has closed: now >= its start + the interval.
 
 Statuses: triggered; waiting (not open yet, range still forming, or no close
-above the level yet); expired (no trigger by no_entries_after, default 15:30;
-on a 1:00 p.m. early close the cutoff moves up three hours with the close);
+above the level yet); expired (no trigger by no_entries_after, default 15:30);
 no-data (the market is closed today or Yahoo sent no bars).
 
-trader/config.json (optional): "no_entries_before" (09:45) and
-"no_entries_after" (15:30), New York time.
+trader/config.json (optional): "no_entries_before" (09:15) and
+"no_entries_after" (15:30), WIB.
 
 watch wakes just after each bar closes (bars only change then), re-polls every
 --every seconds (default 30) while Yahoo has not posted the new bar, prints one
@@ -40,7 +38,7 @@ on expiry, at the close or at --until (exit 1). With --now or --offline it runs
 on a simulated clock and replays the day without sleeping.
 
 Data: Yahoo's free chart JSON (unofficial, can lag, bars not single trades)
-  https://query2.finance.yahoo.com/v8/finance/chart/TSLA?range=1d&interval=5m
+  https://query2.finance.yahoo.com/v8/finance/chart/BBCA.JK?range=1d&interval=5m
   falls back to query1 on HTTP 429 or 5xx; a 429 gets one retry after a pause.
   --offline PATH reads a saved chart JSON (.json or .json.gz) instead, or
   PATH/<TICKER>.json when PATH is a folder. Without --now, an offline file is
@@ -73,16 +71,10 @@ GRACE = 2        # seconds after a bar closes before watch asks for it
 SETTLE = 60      # seconds a closed bar may wait for Yahoo's data to catch up
 HOSTS = ("query2", "query1")
 INTERVALS = {"1m": 60, "5m": 300}
-DEFAULTS = {"no_entries_before": "09:45", "no_entries_after": "15:30"}
+DEFAULTS = {"no_entries_before": "09:15", "no_entries_after": "15:30"}
 EPOCH = datetime.datetime(1970, 1, 1)
 
-_US = market.load("us")
-NYSE_HOLIDAYS = dict(_US["holidays"])
-NYSE_EARLY_CLOSE = dict(_US["early_close"]["dates"])
-CALENDAR_YEARS = tuple(_US["calendar_years"])
-OPEN = datetime.time.fromisoformat(_US["sessions"]["mon"][0][0])
-CLOSE = datetime.time.fromisoformat(_US["sessions"]["mon"][0][1])
-EARLY = datetime.time.fromisoformat(_US["early_close"]["time"])
+_IDX = market.load("idx")
 
 
 class EntryError(Exception):
@@ -90,22 +82,6 @@ class EntryError(Exception):
 
 
 # ---------------------------------------------------------------- time
-
-_nth_sunday = market._nth_sunday
-
-
-def eastern_offset(utc):
-    """Hours from UTC for New York: -4 in daylight time, -5 otherwise."""
-    return market.utc_offset(_US, utc)
-
-
-def to_eastern(utc):
-    return market.to_local(_US, utc)
-
-
-def eastern_to_utc(local):
-    return market.local_to_utc(_US, local)
-
 
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
@@ -125,43 +101,40 @@ def iso(utc):
 
 
 def _tz_label(p):
-    return "ET" if (p or _US).get("id") == "us" else ((p or _US).get("tz_label") or (p or _US).get("timezone") or "local")
+    prof = p or _IDX
+    return prof.get("tz_label") or prof.get("timezone") or "WIB"
 
 
 def _place_label(p):
-    return "New York" if (p or _US).get("id") == "us" else _tz_label(p)
+    return _tz_label(p)
 
 
 def _exchange(p):
-    return (p or _US).get("exchange") or "NYSE"
+    return (p or _IDX).get("exchange") or "IDX"
 
 
 def _px(val, p=None):
-    if (p or _US).get("id") == "us":
-        return "$%.2f" % val
-    return market.money(p, val)
+    return market.money(p or _IDX, val)
 
 
 def _profile_defaults(p=None):
     cfg = dict(DEFAULTS)
     cfg["no_entries_before_break_min"] = 0
-    for k, v in ((p or _US).get("defaults") or {}).items():
+    for k, v in ((p or _IDX).get("defaults") or {}).items():
         if k in cfg:
             cfg[k] = v
     return cfg
 
 
 def parse_now(text, p=None):
-    """--now -> naive UTC. "2026-10-19 10:15" (or ...T10:15, or just 10:15 for
+    """--now -> naive UTC. "2026-11-23 09:35" (or ...T09:35, or just 09:35 for
     today) is market local time; an offset or Z makes it absolute."""
     if not text:
         return utc_now()
-    prof = p or _US
+    prof = p or _IDX
     t = text.strip()
     tz_suf = " " + _tz_label(prof).upper()
-    if t.upper().endswith(" ET"):
-        t = t[:-3].strip()
-    elif t.upper().endswith(tz_suf):
+    if t.upper().endswith(tz_suf):
         t = t[:-len(tz_suf)].strip()
     if re.match(r"^\d{1,2}:\d{2}$", t):
         t = "%s %s" % (market.to_local(prof, utc_now()).date().isoformat(), t.zfill(5))
@@ -169,7 +142,7 @@ def parse_now(text, p=None):
     try:
         dt = datetime.datetime.fromisoformat(t)
     except ValueError:
-        raise EntryError('--now wants a %s time like "2026-10-19 10:15" (or ...Z for UTC)' % _place_label(prof))
+        raise EntryError('--now wants a %s time like "2026-11-23 09:35" (or ...Z for UTC)' % _place_label(prof))
     if dt.tzinfo is None:
         return market.local_to_utc(prof, dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
@@ -199,7 +172,7 @@ def ampm(t):
 
 def trading_day(d, p=None):
     """(is_trading_day, reason). Weekends and the profile's holiday list."""
-    prof = p or _US
+    prof = p or _IDX
     if market.is_trading_day(prof, d):
         return True, ""
     name = (prof.get("holidays") or {}).get(d.isoformat())
@@ -208,12 +181,12 @@ def trading_day(d, p=None):
 
 def session(d, p=None):
     """(open_time, close_time) in market local time, or None if closed all day."""
-    s = market.sessions(p or _US, d)
+    s = market.sessions(p or _IDX, d)
     return s[0] if s else None
 
 
 def next_open(d, p=None):
-    prof = p or _US
+    prof = p or _IDX
     nd = d + datetime.timedelta(days=1)
     for _ in range(15):
         ns = market.sessions(prof, nd)
@@ -226,7 +199,7 @@ def next_open(d, p=None):
 # ---------------------------------------------------------------- Yahoo
 
 def yahoo_symbol(sym, p=None):
-    return market.yahoo_symbol(p or _US, sym)
+    return market.yahoo_symbol(p or _IDX, sym)
 
 
 def chart_path(sym, rng, interval, p=None):
@@ -353,7 +326,7 @@ def offline_file(path, sym, p=None):
 def get_chart(sym, interval, day=None, offline=None, today=None, p=None):
     """Bars for one ticker, from Yahoo (range=1d for today) or a saved file."""
     sym = sym.upper()
-    prof = p or _US
+    prof = p or _IDX
     if offline:
         f = offline_file(offline, sym, prof)
         try:
@@ -409,10 +382,8 @@ def r2(x):
     return None if x is None else round(float(x), 2) + 0.0   # + 0.0 turns -0.0 into 0.0
 
 
-def early_cutoff(day, t, close_dt, open_t=OPEN, std_close=CLOSE):
-    """A cutoff on an early-close day moves up with the close: 15:30 (30 minutes
-    before a 16:00 close) becomes 12:30 before a 1:00 p.m. close. A cutoff that
-    is already before the early close stays."""
+def early_cutoff(day, t, close_dt, open_t, std_close):
+    """A cutoff on an early-close day moves up with the close."""
     at = datetime.datetime.combine(day, t)
     if at < close_dt:
         return at
@@ -431,7 +402,6 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     for k, v in (cfg or {}).items():
         if v is not None:
             eff_cfg[k] = v
-    is_us = prof.get("id") == "us"
     delay_min = int(prof.get("data_delay_min") or 0)
     cal_years = tuple(prof.get("calendar_years") or ())
     early_dates = (prof.get("early_close") or {}).get("dates") or {}
@@ -464,8 +434,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
            "phase": "", "reason": "", "opening_range": None, "level": None, "trigger": None,
            "last": None, "forming": None, "min_volume_x": min_volume_x,
            "prev_close": prev_close, "calendar_known": day.year in cal_years, "_bars": []}
-    if not is_us:
-        res.update(market=prof["id"], tz_label=_tz_label(prof), data_delay_min=delay_min)
+    res.update(market=prof["id"], tz_label=_tz_label(prof), data_delay_min=delay_min)
     dt = chart.get("data_time")
     res["data_time"] = market.to_local(prof, utc_of(dt)).strftime("%Y-%m-%d %H:%M:%S") if dt else None
     ok, why = trading_day(day, prof)
@@ -590,7 +559,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     if local >= cutoff and not (pending and pending["end"] <= cutoff):
         res.update(status="expired", phase="after-close" if local >= close_dt else "after-cutoff",
                    reason="no %s by %s, the last time for a new entry%s" % (
-                       what, short(cutoff), " (1:00 p.m. early close today)" if early else ""))
+                       what, short(cutoff), " (early close today)" if early else ""))
         return res
     res["phase"] = "open"
     if last["c"] > lvl and last in thin:
@@ -626,10 +595,10 @@ def entry_doc(res, now_utc):
            "interval": res["interval"],
            "opening_range": {"high": orr["high"], "low": orr["low"], "minutes": orr["minutes"]} if orr else None,
            "source": "yahoo", "checked_at": iso(now_utc), "reason": res.get("reason")}
-    if res.get("market") and res["market"] != "us":
+    if res.get("market"):
         doc["market"] = res["market"]
-        if res.get("prev_close") is not None:
-            doc["prev_close"] = res["prev_close"]
+    if res.get("prev_close") is not None:
+        doc["prev_close"] = res["prev_close"]
     return doc
 
 
@@ -657,7 +626,7 @@ def setup_name(res, p=None):
 
 def describe(res):
     """Plain lines for a person."""
-    p = market.load(res["market"]) if res.get("market") else _US
+    p = market.load(res["market"]) if res.get("market") else _IDX
     delay_min = int(p.get("data_delay_min") or 0)
     when = datetime.datetime.strptime(res["now"], "%Y-%m-%d %H:%M:%S")
     bars = "5-minute" if res["interval"] == "5m" else "1-minute"
@@ -710,18 +679,17 @@ def describe(res):
         if res.get("next_open"):
             out.append("Next open: %s %s." % (res["next_open"], _place_label(p)))
     if res.get("early_close"):
-        out.append("Early close today at 1:00 p.m. (%s): no new entries after %s." % (
+        out.append("Early close today (%s): no new entries after %s." % (
             res["early_close"], res["no_entries_after"]))
     if not res.get("calendar_known"):
-        site = "idx.co.id" if p.get("id") == "idx" else "nyse.com"
-        yrs = tuple(p.get("calendar_years") or CALENDAR_YEARS)
-        out.append("Holiday list covers %s only: check %s for this date." % (" and ".join(map(str, yrs)), site))
+        yrs = tuple(p.get("calendar_years") or ())
+        out.append("Holiday list covers %s only: check idx.co.id for this date." % " and ".join(map(str, yrs)))
     return out
 
 
 def bar_line(b, res):
     """One watch line for a bar that just closed."""
-    p = market.load(res["market"]) if res.get("market") else _US
+    p = market.load(res["market"]) if res.get("market") else _IDX
     delay_min = int(p.get("data_delay_min") or 0)
     start = short(b["et"])
     orr = res.get("opening_range") or {}
@@ -898,7 +866,7 @@ def _opts(a, cfg):
 
 def _load(a, sym, now, p=None):
     """(chart, now). An offline file without --now is read as of its own time."""
-    prof = p or _US
+    prof = p or _IDX
     real_today = market.to_local(prof, utc_now()).date()
     if a.offline and now is None:
         ch = get_chart(sym, a.interval, offline=a.offline, p=prof)
@@ -1031,7 +999,7 @@ def main(argv=None):
         p.add_argument("--level", type=float, help="the price to close above (--setup level)")
         p.add_argument("--min-volume-x", type=float, help="trigger bar volume vs the range bars' average")
         p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"], help="v2: buy only")
-        p.add_argument("--now", help='pretend it is this New York time, e.g. "2026-10-19 10:15"')
+        p.add_argument("--now", help='pretend it is this WIB time, e.g. "2026-11-23 09:35"')
         p.add_argument("--offline", metavar="PATH", help="saved Yahoo chart JSON (.json/.json.gz) or a folder")
         p.add_argument("--config", default="trader/config.json")
 
@@ -1045,7 +1013,7 @@ def main(argv=None):
     p.add_argument("symbol")
     common(p)
     p.add_argument("--every", type=float, default=30, help="seconds between polls while Yahoo is behind")
-    p.add_argument("--until", help="stop at this New York time (HH:MM)")
+    p.add_argument("--until", help="stop at this WIB time (HH:MM)")
     p.add_argument("--out", default="trader/entry.json", help="where a trigger is written")
     p = sub.add_parser("watchlist", help="check every hit in trader/watchlist.json")
     common(p)

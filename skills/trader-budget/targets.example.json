@@ -1,11 +1,11 @@
 {
-  "source": "Berkshire Hathaway Inc 13F-HR, Q2 2026 (period 2026-06-30, filed 2026-08-14, accession 0001193125-26-352200), top 5 renormalised",
-  "as_of": "2026-06-30",
+  "source": "IDX blue-chip example weights",
+  "as_of": "2026-11-23",
   "weights": [
-    {"ticker": "AAPL", "name": "Apple", "weight": 30.67, "pct_of_13f": 22.04},
-    {"ticker": "AXP", "name": "American Express", "weight": 23.85, "pct_of_13f": 17.14},
-    {"ticker": "GOOGL", "name": "Alphabet", "weight": 17.56, "pct_of_13f": 12.62},
-    {"ticker": "KO", "name": "Coca-Cola", "weight": 15.11, "pct_of_13f": 10.86},
-    {"ticker": "BAC", "name": "Bank of America", "weight": 12.80, "pct_of_13f": 9.20}
+    {"ticker": "BBCA", "name": "Bank Central Asia", "weight": 35.0},
+    {"ticker": "BBRI", "name": "Bank Rakyat Indonesia", "weight": 25.0},
+    {"ticker": "BMRI", "name": "Bank Mandiri", "weight": 20.0},
+    {"ticker": "TLKM", "name": "Telkom Indonesia", "weight": 12.0},
+    {"ticker": "ASII", "name": "Astra International", "weight": 8.0}
   ]
 }

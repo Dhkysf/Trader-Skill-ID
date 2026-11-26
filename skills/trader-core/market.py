@@ -20,9 +20,9 @@ def available():
     return sorted(f[:-5] for f in os.listdir(MARKETS_DIR) if f.endswith(".json"))
 
 
-def load(name="us"):
-    """Load and cache a market profile by name (default: 'us')."""
-    key = (name or "us").strip().lower()
+def load(name="idx"):
+    """Load and cache a market profile by name (default: 'idx')."""
+    key = (name or "idx").strip().lower()
     if key in _CACHE:
         return _CACHE[key]
     avail = available()
@@ -233,7 +233,7 @@ def from_config(cfg_or_path=None):
 
 def money(p, amount):
     """Format `amount` using profile `p`'s currency."""
-    ccy = (p or {}).get("currency", "USD")
+    ccy = (p or {}).get("currency", "IDR")
     if ccy == "IDR":
         n = int(_to_decimal(amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         if n == 0:
