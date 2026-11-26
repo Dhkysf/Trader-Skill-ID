@@ -37,3 +37,5 @@ Use codegraph (explore / callers) to find every caller of a function or constant
 - Before each commit: run the check, `git status`, `git diff`; run skill ponytail-review on the change; fix Bug/Risk findings, only report Speed/Lean ones.
 - Stage only this task's files (`git add <files>`). Conventional Commits in English, max 72 chars, one concern per commit. Never `--no-verify`.
 - No push unless the user asks. Never push to `upstream`.
+- If git fails with "must be run in a work tree", rerun the same command outside the sandbox. To search, use `git grep --no-index --exclude-standard -n "<text>"`.
+- This project has NO .venv (standard library only): run `python`, never `.venv\Scripts\python.exe`. The warning "Failed to find real location of ...python.exe" is harmless; read the test result below it.
