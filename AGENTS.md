@@ -31,7 +31,9 @@ Started from Jakeschincariol/day-trader-skill (MIT, upstream commit 3d0f4ef). Gi
 - Before P01: `python -m unittest discover -s tests`.
 
 ## Code navigation
-Use codegraph (explore / callers) to find every caller of a function or constant before you rename, move or delete it.
+- Before you open, read or edit any code file (.py, .bat or tests), first call `codegraph_explore` for the symbols or area you need. Only then read the files it points to.
+- Before you rename, move or delete a function or constant, use codegraph to list every caller.
+- If codegraph is unavailable or returns nothing, say so in one line, then use `git grep --no-index --exclude-standard -n "<text>"`.
 
 ## Git & Commit
 - Before each commit: run the check, `git status`, `git diff`; run skill ponytail-review on the change; fix Bug/Risk findings, only report Speed/Lean ones.
