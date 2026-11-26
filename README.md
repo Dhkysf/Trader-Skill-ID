@@ -3,8 +3,7 @@
 Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.
 
 Free, MIT, no signup, no API key. The tools are plain Python that read free
-public data: Yahoo Finance charts, Nasdaq Trader's symbol lists, SEC EDGAR
-and the House Clerk.
+public data: Yahoo Finance charts, Nasdaq Trader's symbol lists and SEC EDGAR.
 
 One scans thousands of charts for setups. Another tracks breaking news on
 every stock you watch. One watches a setup bar by bar and tells you the moment
@@ -38,11 +37,11 @@ agy plugin install https://github.com/Dhkysf/Trader-Skill-ID
 ```
 
 The tools need Python 3.8 or newer. Nothing to pip install. The SEC tools
-(news filings, the analyst) ask you to identify yourself: put your name and
+(news filings) ask you to identify yourself: put your name and
 email in `trader/config.json` (`"sec_user_agent": "Your Name you@example.com"`)
 or in the `SEC_USER_AGENT` environment variable.
 
-## The eleven
+## The nine
 
 | command | job | what it does |
 | --- | --- | --- |
@@ -55,8 +54,6 @@ or in the `SEC_USER_AGENT` environment variable.
 | `/trader-budget` | Budget Manager | Sizes every position to your budget and your max loss per trade. |
 | `/trader-broker` | Order Executor | Sends approved orders to your broker, paper trading by default, never without your yes. |
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop or the opening bell hits. |
-| `/trader-analyst` | Earnings Analyst | Reads earnings reports and sums up what changed. |
-| `/trader-pelosi` | Pelosi Tracker | Reads Congress's stock-trade disclosures the minute they are filed. |
 
 Shared module: `/trader-core` - shared market rules used by the other skills.
 
@@ -68,7 +65,7 @@ what the last one wrote:
 ```
 scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker   (one trade)
 alerts: stop, target, flat by the close                                       (while it is open)
-news / analyst / pelosi                                                        (on a schedule)
+news                                                                           (on a schedule)
 ```
 
 An example, the trade in the reel: Tesla, Monday October 19 2026, real data.
@@ -127,8 +124,6 @@ python skills\trader-risk\check.py                                           # P
 python skills\trader-broker\ticket.py show                                   # the tickets, READY or not
 python skills\trader-alerts\alerts.py add --from-plan                        # stop, target, flat by close
 python skills\trader-alerts\alerts.py check                                  # rings what hit, once
-python skills\trader-analyst\facts.py TSLA                                   # quarters, growth, EPS
-python skills\trader-pelosi\ptr.py index --member pelosi                     # her PTRs this year
 ```
 
 ```powershell
@@ -137,9 +132,9 @@ python -m unittest discover -s tests -v
 ```
 
 The tests run offline, on fixtures cut from real data: TSLA's 5-minute bars
-for the 60 days to October 19 2026, the 10:15 AM opening-range scan, Yahoo's
-TSLA headlines that morning, the House Clerk's 2026 index, real PTR text and
-real XBRL facts. They reproduce every number in the example above.
+for the 60 days to October 19 2026, the 10:15 AM opening-range scan, and
+Yahoo's TSLA headlines that morning. They reproduce every number in the example
+above.
 
 ## Fine print
 
@@ -178,10 +173,6 @@ on June 4, 2026 (Regulatory Notice 26-10), and brokers may phase the change
 in until October 20, 2027, so yours may still apply the old rule. If it does,
 set `"pdt_guard": true` and `/trader-risk` counts your day trades.
 
-**Congress's trades are public, not inside information.** Members must disclose
-trades over $1,000 within 45 days (the STOCK Act). The Pelosi skill reads those
-public filings the minute they post.
-
 **Taxes.** Day-trading gains are short-term gains, and frequent trading makes
 wash sales likely. Nothing here is tax advice.
 
@@ -200,8 +191,6 @@ skills/
   trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
   trader-broker/      SKILL.md, ticket.py, mcp_config.example.json
   trader-alerts/      SKILL.md, alerts.py, alerts.example.json
-  trader-analyst/     SKILL.md, facts.py, metrics.example.json
-  trader-pelosi/      SKILL.md, ptr.py
 tests/                unittest suite + offline fixtures
 ```
 

@@ -9,7 +9,7 @@ Started from Jakeschincariol/day-trader-skill (MIT, upstream commit 3d0f4ef). Gi
 - Each skill = `skills/<name>/SKILL.md` + one standard-library Python script.
 - Shared market code + market profiles: `skills/trader-core/` (`market.py`, `markets/*.json`), from task P03a on.
 - Skills hand work to each other through files in `trader/` inside the user's CURRENT folder (gitignored).
-- Pipeline: scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker; alerts while a trade is open; news / analyst / pelosi on a schedule.
+- Pipeline: scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker; alerts while a trade is open; news on a schedule.
 - Tests: `tests/` (unittest, offline fixtures in `tests/fixtures/`).
 
 ## Hard rules
