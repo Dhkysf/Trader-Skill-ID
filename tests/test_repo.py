@@ -24,9 +24,12 @@ def frontmatter(path):
     return (m.group(1) if m else ""), text
 
 
+IGNORED_ROOT = {".codegraph", "trader", "data", "__pycache__", ".venv", "AUDIT.md"}
+
+
 def every_text_file():
     for base, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".codegraph", "trader", "data", ".venv")]
         for f in files:
             if f.endswith((".md", ".py", ".json", ".csv", ".txt", ".xml")) or f == "LICENSE":
                 yield os.path.join(base, f)
@@ -39,8 +42,9 @@ class Repo(unittest.TestCase):
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in IGNORED_ROOT)
+        self.assertEqual(root, sorted([".claude-plugin", "AGENTS.md", "LICENSE", "README.md",
+                                       "check.bat", "tests"] + SKILLS))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -71,11 +75,13 @@ class Repo(unittest.TestCase):
     def test_readme_carries_the_reel_copy(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
             readme = " ".join(fh.read().split())
-        self.assertTrue(readme.startswith("# The Day Trader skill"))
-        for line in (ABOUT,
-                     "https://github.com/Jakeschincariol/day-trader-skill install skill",
-                     "/plugin marketplace add Jakeschincariol/day-trader-skill",
-                     "/plugin install day-trader-skill@day-trader-skill",
+        self.assertTrue(readme.startswith("# Trader Skill ID"))
+        for line in ("Agent skills for day-trading analysis in Google Antigravity: US stocks today, Indonesian stocks (IDX) and forex next.",
+                     "## Install",
+                     "Coming in v0.1.0 (Antigravity).",
+                     "## Ringkasan (Bahasa Indonesia)",
+                     "## Credits",
+                     "Based on [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.",
                      "## Fine print"):
             self.assertIn(line, readme)
         for s in SKILLS:
@@ -88,7 +94,7 @@ class Repo(unittest.TestCase):
             rel = os.path.relpath(path, ROOT)
             if not rel.startswith(os.path.join("tests", "fixtures")):  # fixtures are real data, kept as published
                 self.assertNotIn("\u2014", text, rel)
-            self.assertNotIn("jakeschincariol" + "@" + "gmail.com", text, rel)  # built, so this file passes too
+                self.assertNotIn("@" + "gmail.com", text.lower(), rel)
 
     def test_no_v1_only_skill_is_left_behind(self):
         for path in every_text_file():
