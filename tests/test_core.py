@@ -1,14 +1,19 @@
 import datetime
+import io
+import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from decimal import Decimal
 
-from _load import ROOT, load
+from _load import FIX, ROOT, load
 
 market = load("trader-core", "market")
+size = load("trader-budget", "size")
+check = load("trader-risk", "check")
 
 
 # Original reference implementation from skills/trader-scanner/scan.py
@@ -146,6 +151,78 @@ class CoreTest(unittest.TestCase):
                     self.assertIn("market.utc_offset(", src, path)
                     self.assertNotIn("def _nth_sunday(", src, path)
         self.assertGreaterEqual(len(found), 9)
+
+    def test_tsla_parity_between_old_usd_and_new_currency_neutral_config(self):
+        plan_path = os.path.join(FIX, "trader-budget", "plan-tsla.json")
+        old_cfg = {
+            "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75,
+            "max_order_usd": 4000, "min_order_usd": 5,
+            "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150,
+            "max_trades_per_day": 3, "max_orders_per_day": 10,
+            "min_reward_risk": 1.0, "require_stop": True,
+            "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
+            "fractional": False, "broker": "alpaca", "paper": True, "blocked": [],
+            "allow_options": False, "allow_margin": False, "allow_short": False, "pdt_guard": False,
+        }
+        new_cfg = {
+            "market": "us",
+            "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75,
+            "max_order": 4000, "min_order": 5,
+            "max_loss_per_trade": 50, "max_daily_loss": 150,
+            "max_trades_per_day": 3, "max_orders_per_day": 10,
+            "min_reward_risk": 1.0, "require_stop": True,
+            "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
+            "fractional": False, "broker": "alpaca", "paper": True, "blocked": [],
+            "allow_options": False, "allow_margin": False, "allow_short": False, "pdt_guard": False,
+        }
+        with tempfile.TemporaryDirectory() as d:
+            none = os.path.join(d, "none")
+            outputs = {}
+            for tag, cfg_data in (("old", old_cfg), ("new", new_cfg)):
+                cfg_p = os.path.join(d, tag + "-cfg.json")
+                ord_p = os.path.join(d, "orders.json")
+                rsk_p = os.path.join(d, "risk.json")
+                with open(cfg_p, "w", encoding="utf-8") as fh:
+                    json.dump(cfg_data, fh)
+                with redirect_stdout(io.StringIO()):
+                    rc1 = size.main(["--plan", plan_path, "--config", cfg_p, "--portfolio", none,
+                                     "--now", "2026-10-19 10:15", "--write", ord_p])
+                    rc2 = check.main(["--orders", ord_p, "--config", cfg_p, "--portfolio", none,
+                                      "--prices", none, "--state", none, "--now", "2026-10-19 10:15", "--out", rsk_p])
+                self.assertEqual(rc1, 0)
+                self.assertEqual(rc2, 0)
+                with open(ord_p, "rb") as fh:
+                    orders_bytes = fh.read()
+                with open(rsk_p, "rb") as fh:
+                    risk_bytes = fh.read()
+                outputs[tag] = (orders_bytes, risk_bytes)
+            self.assertEqual(outputs["old"][0], outputs["new"][0])
+            self.assertEqual(outputs["old"][1], outputs["new"][1])
+
+    def test_new_key_wins_over_usd_alias_with_notice(self):
+        merged, notices = market.merge_config(
+            {"max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
+            {"max_loss_per_trade": 50},
+        )
+        self.assertEqual(merged["max_loss_per_trade"], 40)
+        self.assertNotIn("max_loss_per_trade_usd", merged)
+        self.assertEqual(len(notices), 1)
+        self.assertIn("max_loss_per_trade", notices[0])
+        self.assertIn("max_loss_per_trade_usd", notices[0])
+
+        with open(os.path.join(FIX, "trader-budget", "plan-tsla.json"), encoding="utf-8") as fh:
+            plan = json.load(fh)
+        s = size.size_trade(plan, {"budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
+                            today="2026-10-19")
+        self.assertEqual(s["qty"], 6)
+        self.assertEqual(len(s["notices"]), 1)
+
+        with open(os.path.join(FIX, "trader-risk", "orders-tsla.json"), encoding="utf-8") as fh:
+            order = json.load(fh)["orders"][0]
+        res = check.check([order], {"budget": 5000, "max_loss_per_trade": 40, "max_loss_per_trade_usd": 80},
+                          now=check.parse_now("2026-10-19 10:15"))
+        self.assertEqual(res["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any("max_loss_per_trade" in w for w in res["warnings"]))
 
 
 if __name__ == "__main__":

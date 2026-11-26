@@ -19,8 +19,9 @@ REEL_V1 = {"AAPL": 1250, "AXP": 1119, "GOOGL": 823, "KO": 708, "BAC": 600}
 PRICES = {"AAPL": 341.27, "AXP": 309.84, "GOOGL": 353.78, "KO": 90.11, "BAC": 53.96}
 # the contract's v2 config, key for key
 CONTRACT_CFG = {
-    "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order_usd": 4000, "min_order_usd": 5,
-    "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150, "max_trades_per_day": 3, "max_orders_per_day": 10,
+    "market": "us",
+    "budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 4000, "min_order": 5,
+    "max_loss_per_trade": 50, "max_daily_loss": 150, "max_trades_per_day": 3, "max_orders_per_day": 10,
     "min_reward_risk": 1.0, "require_stop": True,
     "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
     "fractional": False, "broker": "alpaca", "paper": True, "blocked": [],
@@ -35,6 +36,9 @@ V1 = {"budget": 5000, "cash_buffer_pct": 10, "max_position_pct": 25, "max_order_
 def cfg(**over):
     with open(CFG) as fh:
         c = json.load(fh)
+    for k in over:
+        if k.endswith("_usd"):
+            c.pop(k[:-4], None)
     c.update(over)
     return c
 

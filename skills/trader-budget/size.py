@@ -67,13 +67,14 @@ _US = market.load("us")
 
 # v2 defaults: the contract's config.example.json. Missing keys fall back to these.
 DEFAULTS = {
+    "market": "us",
     "budget": None,
     "cash_buffer_pct": 10,
     "max_position_pct": 75,
-    "max_order_usd": 4000,
-    "min_order_usd": 5,
-    "max_loss_per_trade_usd": 50,
-    "max_daily_loss_usd": 150,
+    "max_order": 4000,
+    "min_order": 5,
+    "max_loss_per_trade": 50,
+    "max_daily_loss": 150,
     "max_trades_per_day": 3,
     "max_orders_per_day": 10,
     "min_reward_risk": 1.0,
@@ -162,10 +163,8 @@ def read_json(path, what):
 
 
 def load_config(path):
-    cfg = dict(DEFAULTS)
-    if path and os.path.exists(path):
-        cfg.update(read_json(path, "config"))
-    return cfg
+    raw = read_json(path, "config") if (path and os.path.exists(path)) else {}
+    return market.merge_config(raw, DEFAULTS)[0]
 
 
 def _f(x):
@@ -300,8 +299,8 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     price  a FRESH latest price; a market order is sized at the higher of it and the plan's entry
     cash   the cash in trader/portfolio.json, if there is one
     today  New York date (YYYY-MM-DD); a plan for another day is refused"""
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c, cfg_notices = market.merge_config(cfg, DEFAULTS)
+    p = market.from_config(c)
     if not isinstance(plan, dict):
         raise SizeError("the plan is not a JSON object")
     sym = str(plan.get("symbol") or "").strip().upper()
@@ -355,21 +354,21 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     available = max(round(available, 2), 0.0)
 
     limits = []
-    max_loss = _f(c.get("max_loss_per_trade_usd"))
+    max_loss = _f(c.get("max_loss_per_trade"))
     if max_loss:
         limits.append({"name": "max loss", "usd": max_loss, "per": risk, "shares": shares_for(max_loss, risk),
-                       "how": "%s max loss / %s risk a share" % (money(max_loss), _price(risk))})
+                       "how": "%s max loss / %s risk a share" % (money(max_loss, p), _price(risk))})
     cap_pct = _f(c.get("max_position_pct"))
     if cap_pct:
         cap = round(budget * cap_pct / 100.0, 2)
         limits.append({"name": "position cap", "usd": cap, "per": ref, "shares": shares_for(cap, ref),
-                       "how": "%s%% of %s = %s / %s" % (_num(cap_pct), money(budget), money(cap), _price(ref))})
-    max_order = _f(c.get("max_order_usd"))
+                       "how": "%s%% of %s = %s / %s" % (_num(cap_pct), money(budget, p), money(cap, p), _price(ref))})
+    max_order = _f(c.get("max_order"))
     if max_order:
         limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref),
-                       "how": "%s / %s" % (money(max_order), _price(ref))})
+                       "how": "%s / %s" % (money(max_order, p), _price(ref))})
     limits.append({"name": "cash", "usd": available, "per": ref, "shares": shares_for(available, ref),
-                   "how": "%s = %s / %s" % (cash_note, money(available), _price(ref))})
+                   "how": "%s = %s / %s" % (cash_note, money(available, p), _price(ref))})
 
     qty = max(0, min(l["shares"] for l in limits))
     bound = [l["name"] for l in limits if l["shares"] == qty]
@@ -390,9 +389,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         refusal = ("reward:risk %.2f (target %s, entry %s, stop %s) is under your minimum %s, so trader-risk "
                    "would block it. No order. Skip it, or make a new plan with trader-exit."
                    % (reward_c / float(risk_c), _price(target), _price(ref), _price(stop), _num(c["min_reward_risk"])))
-    elif cost < float(c.get("min_order_usd") or 0) - 0.005:
+    elif cost < float(c.get("min_order") or 0) - 0.005:
         refusal = ("%d share%s of %s is %s, under your %s minimum order. No order."
-                   % (qty, "" if qty == 1 else "s", sym, money(cost), money(c["min_order_usd"])))
+                   % (qty, "" if qty == 1 else "s", sym, money(cost, p), money(c["min_order"], p)))
     return {
         "symbol": sym, "side": "buy", "setup": plan.get("setup", ""), "date": plan.get("date"),
         "entry_time": plan.get("entry_time", ""), "entry_plan": round_cent(entry_plan),
@@ -403,6 +402,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         "max_loss_per_trade_usd": max_loss, "limits": limits, "qty": qty, "bound_by": bound[0],
         "cost": cost, "max_loss": loss, "flat_by": plan.get("flat_by") or c.get("flat_by"),
         "order_type": "limit" if limit is not None else "market", "refusal": refusal,
+        "notices": cfg_notices,
     }
 
 
@@ -595,21 +595,22 @@ def whole_shares(dollars, prices, order, cap, cash):
 
 def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None):
     """Weights mode. Pure function: weights + rules -> the full sizing result (a dict)."""
-    budget = float(budget if budget is not None else (cfg.get("budget") or 0))
+    c, cfg_notices = market.merge_config(cfg)
+    budget = float(budget if budget is not None else (c.get("budget") or 0))
     if budget <= 0:
         raise SizeError("no budget: pass --budget or set \"budget\" in trader/config.json")
-    buf_pct = float(cfg.get("cash_buffer_pct", 10))
-    cap_pct = float(cfg.get("max_position_pct", 25))
-    min_order = float(cfg.get("min_order_usd", 5) or 0)
+    buf_pct = float(c.get("cash_buffer_pct", 10))
+    cap_pct = float(c.get("max_position_pct", 25))
+    min_order = float(c.get("min_order", 5) or 0)
     if not 0 <= buf_pct < 100:
         raise SizeError("cash_buffer_pct must be between 0 and 100")
     if not 0 < cap_pct <= 100:
         raise SizeError("max_position_pct must be above 0 and at most 100")
     if whole is None:
-        whole = not cfg.get("fractional", True)
+        whole = not c.get("fractional", True)
     prices = prices or {}
 
-    keep, dropped = normalise(rows, cfg.get("blocked"), top)
+    keep, dropped = normalise(rows, c.get("blocked"), top)
     if not keep:
         raise SizeError("nothing to size: no weights left after the blocked list")
 
@@ -669,6 +670,7 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
         "min_order_usd": min_order, "whole_shares": bool(whole),
         "positions": positions, "invested": invested,
         "idle": round(investable - invested, 2), "dropped": dropped,
+        "notices": cfg_notices,
     }
 
 
@@ -763,7 +765,7 @@ def write_orders(path, orders, cfg, source="", now_utc=None):
 
 # ---------------------------------------------------------------- main
 
-def run_plan(a, cfg):
+def run_plan(a, cfg, cfg_notices=()):
     p = market.from_config(cfg)
     now = parse_now(a.now, p=p)
     today = market.to_local(p, now).date().isoformat()
@@ -777,7 +779,7 @@ def run_plan(a, cfg):
             if limit is None or limit <= 0:
                 raise SizeError("--limit wants a price, like --limit 364.00")
     sym = str((plan or {}).get("symbol") or "").upper()
-    notes, price = [], None
+    notes, price = list(cfg_notices), None
     ppath = a.prices or ("trader/prices.json" if os.path.exists("trader/prices.json") else None)
     if ppath and limit is None and sym:
         pdoc = read_json(ppath, "prices")
@@ -810,7 +812,9 @@ def run_plan(a, cfg):
     return 0 if order else 1
 
 
-def run_weights(a, cfg):
+def run_weights(a, cfg, cfg_notices=()):
+    for n in cfg_notices:
+        print("note: " + n, file=sys.stderr)
     source = ""
     if a.weights:
         rows = parse_weights(weights_from_arg(a.weights))
@@ -859,12 +863,13 @@ def main(argv=None):
     g.add_argument("--cents", action="store_true", help="size to the cent instead of whole dollars")
     a = ap.parse_args(argv)
     try:
-        cfg = load_config(a.config)
+        raw_cfg = read_json(a.config, "config") if (a.config and os.path.exists(a.config)) else {}
+        cfg, cfg_notices = market.merge_config(raw_cfg, DEFAULTS)
         if a.weights or a.targets:
-            return run_weights(a, cfg)
+            return run_weights(a, cfg, cfg_notices)
         if a.top or a.whole_shares or a.cents:
             raise SizeError("--top, --whole-shares and --cents work with --weights or --targets")
-        return run_plan(a, cfg)
+        return run_plan(a, cfg, cfg_notices)
     except (SizeError, ValueError) as e:
         print("size.py: %s" % e, file=sys.stderr)
         return 1

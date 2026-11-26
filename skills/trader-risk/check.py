@@ -73,8 +73,9 @@ if _CORE not in sys.path:
 import market  # noqa: E402
 
 DEFAULTS = {
-    "budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order_usd": 4000,
-    "min_order_usd": 5, "max_loss_per_trade_usd": 50, "max_daily_loss_usd": 150, "max_trades_per_day": 3,
+    "market": "us",
+    "budget": None, "cash_buffer_pct": 10, "max_position_pct": 75, "max_order": 4000,
+    "min_order": 5, "max_loss_per_trade": 50, "max_daily_loss": 150, "max_trades_per_day": 3,
     "max_orders_per_day": 10, "min_reward_risk": 1.0, "require_stop": True,
     "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
     "paper": True, "blocked": [], "allow_options": False, "allow_margin": False, "allow_short": False,
@@ -348,8 +349,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
 
     now          naive UTC (default: the real clock); its New York date is "today"
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
-    c = dict(DEFAULTS)
-    c.update(cfg or {})
+    c, cfg_notices = market.merge_config(cfg, DEFAULTS)
     p = market.from_config(c)
     prices = {str(k).upper(): float(v) for k, v in (prices or {}).items() if _f(v)}
     now_utc = now or parse_now(None, p=p)
@@ -376,6 +376,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     batch_entries, batch_loss = 0, 0.0
     if not c.get("paper", True):
         top_warn.append("LIVE account (\"paper\": false): these orders use real money")
+    top_warn.extend(cfg_notices)
     top_warn.extend(win_warns)
 
     def fresh(sym):
@@ -505,12 +506,12 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         if sym in blocked:
             later.append("blocked: %s is on your blocked list" % sym)
         if value is not None:
-            if value < float(c.get("min_order_usd") or 0) - CENT:
+            if value < float(c.get("min_order") or 0) - CENT:
                 later.append("size: %s is under your %s minimum order"
-                             % (money(value), money(c["min_order_usd"])))
-            if c.get("max_order_usd") and value > float(c["max_order_usd"]) + CENT:
+                             % (money(value, p), money(c["min_order"], p)))
+            if c.get("max_order") and value > float(c["max_order"]) + CENT:
                 later.append("size: %s is over your %s max order"
-                             % (money(value), money(c["max_order_usd"])))
+                             % (money(value, p), money(c["max_order"], p)))
 
         # account effects, simulated in order
         cash = acct["cash"]
@@ -569,10 +570,10 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     risk_ps = risk_c / 100.0
                     shares = q if q is not None else ((value or 0) / ref)
                     max_loss = round(shares * risk_ps, 2)
-                    cap = _f(c.get("max_loss_per_trade_usd"))
+                    cap = _f(c.get("max_loss_per_trade"))
                     if cap and max_loss > cap + CENT:
                         later.append("loss: %s shares x %s risk a share = %s at the stop, over your %s max loss "
-                                     "per trade" % (_num(shares), _p(risk_ps), money(max_loss), money(cap)))
+                                     "per trade" % (_num(shares), _p(risk_ps), money(max_loss, p), money(cap, p)))
                     min_rr = _f(c.get("min_reward_risk"))
                     if target:
                         if (long and target <= ref + CENT) or (not long and target >= ref - CENT):
@@ -586,7 +587,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     elif min_rr:
                         later.append("reward:risk: no target to measure it against (min_reward_risk %s)"
                                      % _num(min_rr))
-            daily = _f(c.get("max_daily_loss_usd"))
+            daily = _f(c.get("max_daily_loss"))
             if daily and max_loss is not None:
                 used = loss_today + batch_loss
                 if used + max_loss > daily + CENT:
@@ -607,8 +608,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                             % (_p(ref), REF_WORDS.get(ref_from, ref_from), _p(stop),
                                _p(target) if target else "none", _p(risk_ps)))
                 info.append("max loss %s%s, reward:risk %s%s"
-                            % (money(max_loss), (" (limit %s)" % money(c["max_loss_per_trade_usd"]))
-                               if _f(c.get("max_loss_per_trade_usd")) else "",
+                            % (money(max_loss, p), (" (limit %s)" % money(c["max_loss_per_trade"], p))
+                               if _f(c.get("max_loss_per_trade")) else "",
                                ("%.2f" % rr) if rr is not None else "n/a",
                                (" (min %s)" % _num(c["min_reward_risk"])) if _f(c.get("min_reward_risk")) else ""))
             if daily or cap_t:

@@ -32,6 +32,9 @@ def at(text):
 def cfg(**over):
     with open(CFG_PATH) as fh:
         c = json.load(fh)
+    for k in over:
+        if k.endswith("_usd"):
+            c.pop(k[:-4], None)
     c.update(over)
     return c
 

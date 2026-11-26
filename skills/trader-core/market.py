@@ -161,3 +161,30 @@ def money(p, amount):
     ccy = (p or {}).get("currency", "USD")
     prefix = _CURRENCY_PREFIX.get(ccy)
     return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
+
+
+MONEY_LIMIT_ALIASES = (
+    ("max_loss_per_trade", "max_loss_per_trade_usd"),
+    ("max_daily_loss", "max_daily_loss_usd"),
+    ("max_order", "max_order_usd"),
+    ("min_order", "min_order_usd"),
+)
+
+
+def merge_config(cfg, defaults=None):
+    """Merge user config over optional defaults, resolving *_usd aliases.
+    Returns (merged_dict, notices). If both new and old keys are set, new wins."""
+    raw = cfg or {}
+    out = dict(defaults or {})
+    out.update(raw)
+    notices = []
+    for new_key, old_key in MONEY_LIMIT_ALIASES:
+        has_new = new_key in raw
+        has_old = old_key in raw
+        if has_new and has_old:
+            out[new_key] = raw[new_key]
+            notices.append("config sets both %s and %s: using %s" % (new_key, old_key, new_key))
+        elif has_old:
+            out[new_key] = raw[old_key]
+        out.pop(old_key, None)
+    return out, notices
