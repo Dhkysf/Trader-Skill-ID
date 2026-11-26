@@ -593,15 +593,21 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         cash = acct["cash"]
         total = cash + sum(acct["values"].values())
         buffer_usd = total * float(c.get("cash_buffer_pct") or 0) / 100.0
+        buy_fee = 0.0
+        if value is not None and side == "buy" and buy_fee_pct > 0:
+            step = Decimal("1") if p.get("currency") == "IDR" else Decimal("0.01")
+            buy_fee = float((market._to_decimal(value) * market._to_decimal(buy_fee_pct) / Decimal("100"))
+                            .quantize(step, rounding=ROUND_HALF_UP))
         if value is not None and side == "buy" and kind == "entry":
-            after_cash = cash - value
+            cash_need = value + buy_fee
+            after_cash = cash - cash_need
             if after_cash < -CENT and (is_idx or not c.get("allow_margin")):
                 if is_idx and c.get("allow_margin"):
                     later.append("cash: needs %s but only %s cash; margin orders are not allowed on IDX"
-                                 % (money(value, p), money(cash, p)))
+                                 % (money(cash_need, p), money(cash, p)))
                 else:
                     later.append("cash: needs %s but only %s cash; that would be margin (borrowed money)"
-                                 % (money(value, p), money(cash, p)))
+                                 % (money(cash_need, p), money(cash, p)))
             elif after_cash < buffer_usd - CENT:
                 later.append("cash: leaves %s cash, under your %s%% buffer of %s"
                              % (money(max(after_cash, 0), p), _pct(c["cash_buffer_pct"]), money(buffer_usd, p)))
@@ -758,7 +764,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                 batch_loss += max_loss or 0.0
             if side == "buy":
                 if value is not None:
-                    acct["cash"] -= value
+                    acct["cash"] -= value + buy_fee
                     acct["values"][sym] = acct["values"].get(sym, 0.0) + value
                 if q is not None:
                     acct["shares"][sym] = held + q

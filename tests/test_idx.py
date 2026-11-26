@@ -719,6 +719,26 @@ class IdxRiskTest(unittest.TestCase):
         self.assertEqual(res["today"]["pdt_guard"], "not used on IDX")
         self.assertIn("pdt_guard: not used on IDX", check.report(res))
 
+    def test_cash_check_and_cash_after_include_buy_fee(self):
+        cfg = dict(self.cfg, max_loss_per_trade=75000)
+        order = size.bracket_order(size.size_trade(self.plan, cfg, today="2026-11-23"))
+        res = check.check([order], cfg, now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res["cash_after"], 7033056.0)
+        self.assertIn("Cash after the passed orders: Rp 7.033.056", check.report(res))
+
+        res_tight = check.check([order], dict(cfg, budget=2965000, cash_buffer_pct=0, max_position_pct=100),
+                                now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_tight["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("cash:") and "Rp 2.966.944" in r for r in res_tight["results"][0]["reasons"]))
+
+        res_nofee_tight = check.check([order], dict(cfg, budget=2965000, cash_buffer_pct=0,
+                                                    max_position_pct=100, buy_fee_pct=0),
+                                      now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res_nofee_tight["results"][0]["verdict"], "PASS")
+
+        res_nofee = check.check([order], dict(cfg, buy_fee_pct=0), now=self._at("2026-11-23 10:15"))
+        self.assertIn("Cash after the passed orders: Rp 7.037.500", check.report(res_nofee))
+
 
 class IdxBrokerTest(unittest.TestCase):
     """Offline end-to-end BBCA manual ticket tests (no Alpaca / MCP fields, explicit yes, journalling)."""
