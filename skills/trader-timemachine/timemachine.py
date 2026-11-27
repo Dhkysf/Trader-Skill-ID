@@ -282,12 +282,16 @@ def fetch_chart(sym, p=None):
                     raise TMError("Yahoo has no chart for %s (HTTP 404): check the ticker" % sym.upper())
                 raise TMError("Yahoo answered HTTP %d for %s" % (e.code, sym.upper()))
             except urllib.error.URLError as e:
-                raise TMError("could not reach Yahoo: %s" % e.reason)
+                last = "could not reach Yahoo: %s" % e.reason
+                break
             except OSError as e:
-                raise TMError("could not reach Yahoo: %s" % e)
+                last = "could not reach Yahoo: %s" % e
+                break
     if last == 429:
         raise TMError("Yahoo is rate limiting (HTTP 429). Wait a minute and run it again.")
-    raise TMError("Yahoo answered HTTP %s for %s on both hosts. Try again later." % (last, sym.upper()))
+    if isinstance(last, int):
+        raise TMError("Yahoo answered HTTP %s for %s on both hosts. Try again later." % (last, sym.upper()))
+    raise TMError(last)
 
 
 def read_offline(path, sym, p=None):

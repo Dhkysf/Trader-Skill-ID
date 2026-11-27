@@ -8,8 +8,10 @@ import gzip
 import io
 import json
 import os
+import socket
 import tempfile
 import unittest
+import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
 from unittest import mock
@@ -461,6 +463,45 @@ class IdxAlertsTest(unittest.TestCase):
 
         # Yahoo .JK only
         self.assertIn("/BBCA.JK?", alerts.yahoo_url("BBCA", p=self.idx))
+
+    def test_alerts_falls_back_to_query1_on_urlerror_and_timeout(self):
+        self.assertEqual(alerts.BACKOFF, 5.0)
+        with gzip.open(BBCA_5M, "rt", encoding="utf-8") as fh:
+            body = fh.read()
+        saved = (alerts._urlopen, alerts._sleep)
+        try:
+            hosts = []
+            def fake_urlerror(req, timeout=None):
+                host = req.full_url.split("/")[2]
+                hosts.append(host)
+                if host == "query2.finance.yahoo.com":
+                    raise urllib.error.URLError("connection refused")
+                return io.BytesIO(body.encode("utf-8"))
+            alerts._urlopen = fake_urlerror
+            alerts._sleep = lambda s: None
+            self.assertEqual(alerts.fetch_yahoo("BBCA", p=self.idx), body)
+            self.assertEqual(hosts, ["query2.finance.yahoo.com", "query1.finance.yahoo.com"])
+
+            hosts2 = []
+            class TimeoutResp(object):
+                def read(self):
+                    raise socket.timeout("read timed out")
+                def __enter__(self):
+                    return self
+                def __exit__(self, *a):
+                    return False
+
+            def fake_timeout(req, timeout=None):
+                host = req.full_url.split("/")[2]
+                hosts2.append(host)
+                if host == "query2.finance.yahoo.com":
+                    return TimeoutResp()
+                return io.BytesIO(body.encode("utf-8"))
+            alerts._urlopen = fake_timeout
+            self.assertEqual(alerts.fetch_yahoo("BBCA", p=self.idx), body)
+            self.assertEqual(hosts2, ["query2.finance.yahoo.com", "query1.finance.yahoo.com"])
+        finally:
+            alerts._urlopen, alerts._sleep = saved
 
 
 class IdxTimeMachineTest(unittest.TestCase):
@@ -1267,6 +1308,146 @@ class IdxNewsRssTest(unittest.TestCase):
             self.assertTrue(all(it["touches"] == ["BBCA"] for it in data["items"]))
             self.assertEqual(len(data["moves"]), 1)
             self.assertEqual(data["moves"][0]["ticker"], "BBCA")
+
+    def test_news_429_retries_once_then_succeeds(self):
+        xml = b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel></channel></rss>'
+        calls, sleeps, closed = [], [], []
+
+        class TrackedHTTPError(urllib.error.HTTPError):
+            def close(self):
+                closed.append(True)
+                super(TrackedHTTPError, self).close()
+
+        class FakeResp(object):
+            headers = {}
+            def read(self):
+                return xml
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            calls.append(req.full_url)
+            if len(calls) == 1:
+                raise TrackedHTTPError(req.full_url, 429, "Too Many Requests", {}, io.BytesIO(b""))
+            return FakeResp()
+
+        with mock.patch.object(news.urllib.request, "urlopen", side_effect=fake_urlopen), \
+             mock.patch.object(news.time, "sleep", side_effect=sleeps.append):
+            got = news.Fetcher(pause=0).get("https://example.com/rss", "feed.xml")
+        self.assertEqual(got, xml)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sleeps, [5.0])
+        self.assertEqual(closed, [True])
+
+    def test_news_429_twice_reports_note_and_prints_other_feeds(self):
+        xml_b = (
+            b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+            b'<item><title>Saham BBCA Menguat</title>'
+            b'<link>https://example.com/b1</link><guid>b1</guid>'
+            b'<pubDate>Thu, 26 Nov 2026 10:00:00 +0700</pubDate>'
+            b'<description>Berita BBCA.</description></item>'
+            b'</channel></rss>'
+        )
+        sleeps = []
+
+        class FakeResp(object):
+            headers = {}
+            def read(self):
+                return xml_b
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            if "feed-a" in req.full_url:
+                raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, io.BytesIO(b""))
+            return FakeResp()
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"news_feeds": [
+                    {"label": "Feed A", "url": "https://example.com/feed-a.xml"},
+                    {"label": "Feed B", "url": "https://example.com/feed-b.xml"},
+                ]}, fh)
+            with mock.patch.object(news.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                 mock.patch.object(news.time, "sleep", side_effect=sleeps.append):
+                code, out, err = self._run_news([
+                    "--tickers", "BBCA", "--config", cfg_p, "--no-moves", "--dry-run",
+                    "--hours", "48", "--now", "2026-11-26T12:00:00+07:00",
+                    "--portfolio", os.path.join(d, "none.json"),
+                    "--watchlist", os.path.join(d, "none.json"),
+                    "--plan", os.path.join(d, "none.json"),
+                    "--universe", os.path.join(d, "none.txt"),
+                ])
+        self.assertEqual(code, 0, err)
+        self.assertEqual(sleeps.count(5.0), 1)
+        notes = [ln for ln in out.splitlines() if ln.startswith("note:")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Feed A", notes[0])
+        self.assertIn("429", notes[0])
+        self.assertIn("Saham BBCA Menguat", out)
+        self.assertNotIn("Traceback", out + err)
+
+    def test_news_read_socket_timeout_reports_note_no_traceback(self):
+        xml_b = (
+            b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel>'
+            b'<item><title>Saham BBCA Stabil</title>'
+            b'<link>https://example.com/b2</link><guid>b2</guid>'
+            b'<pubDate>Thu, 26 Nov 2026 10:00:00 +0700</pubDate>'
+            b'<description>Berita BBCA.</description></item>'
+            b'</channel></rss>'
+        )
+
+        class TimeoutResp(object):
+            headers = {}
+            def read(self):
+                raise socket.timeout("timed out")
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        class OkResp(object):
+            headers = {}
+            def read(self):
+                return xml_b
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            if "feed-a" in req.full_url:
+                return TimeoutResp()
+            return OkResp()
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"news_feeds": [
+                    {"label": "Feed A", "url": "https://example.com/feed-a.xml"},
+                    {"label": "Feed B", "url": "https://example.com/feed-b.xml"},
+                ]}, fh)
+            with mock.patch.object(news.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                 mock.patch.object(news.time, "sleep"):
+                code, out, err = self._run_news([
+                    "--tickers", "BBCA", "--config", cfg_p, "--no-moves", "--dry-run",
+                    "--hours", "48", "--now", "2026-11-26T12:00:00+07:00",
+                    "--portfolio", os.path.join(d, "none.json"),
+                    "--watchlist", os.path.join(d, "none.json"),
+                    "--plan", os.path.join(d, "none.json"),
+                    "--universe", os.path.join(d, "none.txt"),
+                ])
+        self.assertEqual(code, 0, err)
+        notes = [ln for ln in out.splitlines() if ln.startswith("note:")]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Feed A", notes[0])
+        self.assertIn("Saham BBCA Stabil", out)
+        self.assertNotIn("Traceback", out + err)
 
 
 class IdxPipelineMoneySafetyTest(unittest.TestCase):

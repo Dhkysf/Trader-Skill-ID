@@ -57,7 +57,7 @@ import market  # noqa: E402
 
 UA = "Mozilla/5.0 (compatible; trader-skill-id/0.1; +https://github.com/Dhkysf/Trader-Skill-ID)"
 PAUSE = 0.5    # seconds between requests: be polite to free endpoints
-BACKOFF = 2.0  # seconds to wait before the one retry after a 429
+BACKOFF = 5.0  # seconds to wait before the one retry after a 429
 YAHOO_HOSTS = ("query2.finance.yahoo.com", "query1.finance.yahoo.com")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 
@@ -204,28 +204,32 @@ def _get(url, timeout=20):
             except Exception:
                 pass
         return e.code, body
-    except urllib.error.URLError as e:
-        raise AlertError("could not reach %s: %s" % (url.split("/")[2], e.reason))
+    except (urllib.error.URLError, OSError) as e:
+        raise AlertError("could not reach %s: %s" % (url.split("/")[2], getattr(e, "reason", e)))
 
 
 def fetch_yahoo(sym, timeout=20, p=None):
     """query2 first. A 429 waits BACKOFF seconds and tries once more; a 429 or a 5xx
     after that moves on to query1. A 404 comes back as Yahoo's own error JSON."""
-    last = None
+    last_err = "no answer"
     for host in YAHOO_HOSTS:
         url = yahoo_url(sym, host, p=p)
-        code, text = _get(url, timeout)
-        if code == 429:
-            _sleep(BACKOFF)
+        try:
             code, text = _get(url, timeout)
+            if code == 429:
+                _sleep(BACKOFF)
+                code, text = _get(url, timeout)
+        except AlertError as e:
+            last_err = str(e)
+            continue
         if code == 200:
             return text
         if code == 404 and text.strip().startswith("{"):
             return text
-        last = (url, code)
+        last_err = "%s answered HTTP %d" % (url.split("?")[0], code)
         if code != 429 and code < 500:
             break
-    raise AlertError("%s answered HTTP %d" % (last[0].split("?")[0], last[1]))
+    raise AlertError(last_err)
 
 
 def _offline_text(folder, source, sym, p=None):

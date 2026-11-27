@@ -51,6 +51,7 @@ _IDX = market.load("idx")
 
 CHART = "https://%s.finance.yahoo.com/v8/finance/chart/%s?range=1d&interval=5m"
 BROWSER_UA = "Mozilla/5.0 (compatible; trader-skill-id/0.1; +https://github.com/Dhkysf/Trader-Skill-ID)"
+BACKOFF = 5.0  # seconds to wait before the one retry after a 429
 DEFAULT_UNIVERSE = "trader/universe.txt"
 KEEP_DAYS = 30
 MOVE_PCT = 3.0  # a stock this far from yesterday's close is flagged as moving
@@ -143,16 +144,29 @@ class Fetcher(object):
         self._last = time.time()
         headers = {"User-Agent": BROWSER_UA, "Accept-Encoding": "gzip"}
         req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read()
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    data = gzip.decompress(data)
-                return data
-        except urllib.error.HTTPError as exc:
-            raise NewsError("HTTP %s for %s" % (exc.code, url))
-        except urllib.error.URLError as exc:
-            raise NewsError("could not reach %s: %s" % (url, exc.reason))
+        for attempt in (0, 1):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    data = resp.read()
+                    hdrs = getattr(resp, "headers", None)
+                    if hdrs and hdrs.get("Content-Encoding") == "gzip":
+                        data = gzip.decompress(data)
+                    return data
+            except urllib.error.HTTPError as exc:
+                code = exc.code
+                try:
+                    exc.close()
+                except Exception:
+                    pass
+                if code == 429 and attempt == 0:
+                    time.sleep(BACKOFF)
+                    self._last = time.time()
+                    continue
+                raise NewsError("HTTP %s for %s" % (code, url))
+            except urllib.error.URLError as exc:
+                raise NewsError("could not reach %s: %s" % (url, exc.reason))
+            except OSError as exc:
+                raise NewsError("could not reach %s: %s" % (url, exc))
 
 
 def yahoo_symbol(ticker, p=None):
@@ -236,7 +250,7 @@ def collect_moves(fetcher, watch, errors=None, p=None):
             try:
                 data = fetcher.get(CHART % ("query2", yahoo_symbol(t, p=p)), name)
             except NewsError as exc:
-                if fetcher.offline or not re.search(r"HTTP (429|5\d\d)", str(exc)):
+                if fetcher.offline or not re.search(r"HTTP (429|5\d\d)|could not reach", str(exc)):
                     raise
                 data = fetcher.get(CHART % ("query1", yahoo_symbol(t, p=p)), name)
             out.append(parse_chart(data, t))
