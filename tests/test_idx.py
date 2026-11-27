@@ -154,11 +154,13 @@ class IdxScannerTest(unittest.TestCase):
             "daily", "--config", self.cfg, "--offline", SPARK_DAILY,
             "--now", "2026-11-27 08:30", "--out", out_wl,
         ])
-        self.assertIn(code, (0, 1))
+        self.assertEqual(code, 0)
+        self.assertIn("2 charts matched a setup", out)
         self.assertIn(DELAY_MSG, out)
         self.assertIn("Rp 5.000.000.000+ traded value", out)
         with open(out_wl, encoding="utf-8") as fh:
             doc = json.load(fh)
+        self.assertEqual([h["symbol"] for h in doc["hits"]], ["BBCA", "BBRI"])
         self.assertEqual(doc["delay_notice"], DELAY_MSG)
         self.assertEqual(doc["filters"]["min_price"], 100.0)
         self.assertEqual(doc["filters"]["min_value"], 5000000000.0)
@@ -169,12 +171,14 @@ class IdxScannerTest(unittest.TestCase):
             "orb", "--config", self.cfg, "--offline", BBCA_5M,
             "--now", "2026-11-26 14:30", "--out", out_wl,
         ])
-        self.assertIn(code, (0, 1))
+        self.assertEqual(code, 0)
+        self.assertIn("1 of 1 charts closed above their opening-range high", out)
         self.assertIn("9:00 to 9:15 AM", out)
         self.assertIn("1 usable", out)
         self.assertIn(DELAY_MSG, out)
         with open(out_wl, encoding="utf-8") as fh:
             doc = json.load(fh)
+        self.assertEqual([h["symbol"] for h in doc["hits"]], ["BBCA"])
         self.assertEqual(doc["scanned"], 1)
         self.assertEqual(doc["delay_notice"], DELAY_MSG)
 

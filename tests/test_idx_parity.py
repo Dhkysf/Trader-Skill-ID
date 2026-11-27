@@ -325,9 +325,10 @@ class IdxScannerParityTest(unittest.TestCase):
             fh.write("# idx\nBBCA|Bank Central Asia\nbbri\n\nBBCA\n")
         self.assertEqual(scan.symbols_from_file(txt), ["BBCA", "BBRI", "BBCA"])
         code3, j3, _ = _run_mod(scan, ["daily", "--config", self.cfg, "--offline", SPARK_DAILY, "--now", "2026-11-27 08:30", "--limit", "2", "--json", "--no-write"])
-        self.assertIn(code3, (0, 1))
+        self.assertEqual(code3, 0)
         d3 = json.loads(j3)
         self.assertEqual(d3["universe"], 2)
+        self.assertEqual([h["symbol"] for h in d3["hits"]], ["BBCA", "BBRI"])
         self.assertEqual(d3["note"], "A scan is a list of charts that match a rule, not a list of stocks to buy.")
 
 
