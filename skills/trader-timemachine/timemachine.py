@@ -233,11 +233,25 @@ def utc_of(ts):
     return EPOCH + datetime.timedelta(seconds=int(ts))
 
 
+def _clock_examples(p=None):
+    return "03:20 or 15:55" if _has_overnight(p or _IDX) else "10:15 AM or 15:55"
+
+
+def _session_contains_min(p, minutes):
+    for spans in ((p or _IDX).get("sessions") or {}).values():
+        for o, c in spans:
+            om = int(o[:2]) * 60 + int(o[3:])
+            cm = int(c[:2]) * 60 + int(c[3:])
+            if om == cm or (minutes >= om or minutes <= cm if cm < om else om <= minutes <= cm):
+                return True
+    return False
+
+
 def parse_clock(text, what, p=None):
-    """'10:15 AM', '10:15am', '15:55' or '3:55' (a bare 1 to 8 o'clock means p.m.) -> minutes after midnight."""
+    """'10:15 AM', '10:15am', '15:55', '03:20', or '3:55' (bare 1-8 means p.m. only if no session has that a.m. hour) -> minutes after midnight."""
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*(?:([AaPp])\.?\s*[Mm]\.?)?\s*$", str(text or ""))
     if not m:
-        raise TMError("%s wants a %s time like 10:15 AM or 15:55, not %r" % (what, _place_label(p), text))
+        raise TMError("%s wants a %s time like %s, not %r" % (what, _place_label(p), _clock_examples(p), text))
     h, mi, ap = int(m.group(1)), int(m.group(2)), (m.group(3) or "").lower()
     if mi > 59 or h > 23 or (ap and not 1 <= h <= 12):
         raise TMError("%s %r is not a clock time" % (what, text))
@@ -245,7 +259,7 @@ def parse_clock(text, what, p=None):
         h += 12
     elif ap == "a" and h == 12:
         h = 0
-    elif not ap and 1 <= h <= 8:
+    elif not ap and 1 <= h <= 8 and not m.group(1).startswith("0") and not _session_contains_min(p, h * 60 + mi):
         h += 12
     return h * 60 + mi
 
@@ -739,8 +753,9 @@ def normalize_plan(raw, src="flags", p=None):
     if raw.get("entry_time"):
         close_min = parse_clock(raw["entry_time"], "entry_time", p=prof)
         if (close_min - open_min) % 5:
-            raise TMError("entry_time %s is not on the 5-minute grid (use the bar's close, e.g. 10:15 AM)"
-                          % raw["entry_time"])
+            ex_t = "03:20" if _has_overnight(prof) else "10:15 AM"
+            raise TMError("entry_time %s is not on the 5-minute grid (use the bar's close, e.g. %s)"
+                          % (raw["entry_time"], ex_t))
         mapped = _session_close_min(sm, close_min)
         if mapped is not None:
             k = sm["by_close"][mapped]
@@ -760,7 +775,8 @@ def normalize_plan(raw, src="flags", p=None):
         else:
             k = kb
     if k is None:
-        raise TMError("the plan needs entry_time (the entry bar's close, e.g. 10:15 AM) or entry_bar")
+        ex_t = "03:20" if _has_overnight(prof) else "10:15 AM"
+        raise TMError("the plan needs entry_time (the entry bar's close, e.g. %s) or entry_bar" % ex_t)
     if not 0 <= k <= sm["total"] - 2:
         raise TMError("the entry must close between %s and %s to leave bars to replay (got %s)"
                       % (clock12(sm["slots"][0] + 5), clock12(sm["slots"][-2] + 5),
@@ -1208,6 +1224,10 @@ def cmd_chart(a):
 
 
 def main(argv=None):
+    try:
+        _help_prof = market.from_config("trader/config.json")
+    except Exception:
+        _help_prof = _IDX
     ap = argparse.ArgumentParser(description="Time Machine: replay a planned day trade (trader-timemachine).")
     sub = ap.add_subparsers(dest="cmd")
 
@@ -1219,7 +1239,7 @@ def main(argv=None):
         p.add_argument("--entry", type=float)
         p.add_argument("--stop", type=float)
         p.add_argument("--target", type=float)
-        p.add_argument("--entry-time", help='the entry bar\'s close, e.g. "10:15 AM"')
+        p.add_argument("--entry-time", help="the entry bar's close, e.g. %s" % _clock_examples(_help_prof))
         p.add_argument("--setup", default="orb")
         p.add_argument("--or-minutes", type=int, default=15)
         p.add_argument("--stop-rule", default="auto", choices=["auto", "or_mid", "or_low", "or_high", "pct"])

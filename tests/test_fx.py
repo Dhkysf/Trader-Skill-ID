@@ -165,6 +165,19 @@ class FxProfileTest(unittest.TestCase):
                             p=self.idx, cfg={"market": "idx"})
         self.assertIn("v2 plans longs only", str(ctx2.exception))
 
+    def test_parse_clock_idx_and_fx(self):
+        self.assertEqual(tm_mod.parse_clock("03:20", "entry_time", p=self.fx), 3 * 60 + 20)
+        self.assertEqual(tm_mod.parse_clock("3:20", "entry_time", p=self.fx), 3 * 60 + 20)
+        self.assertEqual(tm_mod.parse_clock("1:35", "entry_time", p=self.idx), 13 * 60 + 35)
+        self.assertEqual(tm_mod.parse_clock("09:45", "entry_time", p=self.idx), 9 * 60 + 45)
+        self.assertEqual(tm_mod.parse_clock("03:20", "entry_time", p=self.idx), 3 * 60 + 20)
+        with self.assertRaises(tm_mod.TMError) as fx_err:
+            tm_mod.parse_clock("bad", "entry_time", p=self.fx)
+        self.assertIn("03:20 or 15:55", str(fx_err.exception))
+        with self.assertRaises(tm_mod.TMError) as idx_err:
+            tm_mod.parse_clock("bad", "entry_time", p=self.idx)
+        self.assertIn("10:15 AM or 15:55", str(idx_err.exception))
+
 
 class FxCliTest(unittest.TestCase):
     def _run_cli(self, skill, script, args, cfg):
@@ -267,6 +280,18 @@ class FxCliTest(unittest.TestCase):
         self.assertIn("short", r.stdout)
         self.assertNotIn("closed above their opening-range high", r.stdout)
         self.assertNotIn("% over", r.stdout)
+
+    def test_timemachine_cli_fx_bare_early_morning_time(self):
+        r = self._run_cli(
+            "trader-timemachine", "timemachine.py",
+            ["run", "--symbol", "EURUSD", "--side", "sell", "--date", "2026-11-26",
+             "--entry", "1.09745", "--stop", "1.09995", "--target", "1.09245",
+             "--entry-time", "03:20", "--offline", EURUSD_GZ,
+             "--now", "2026-11-26 03:25", "--seed", "19"],
+            {"market": "fx", "allow_short": True},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("at 3:20 AM", r.stdout)
 
 
 class FxPipelineTest(unittest.TestCase):
