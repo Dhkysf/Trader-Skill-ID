@@ -508,9 +508,9 @@ def cmd_clock(a):
                                                     (" (early close: %s)" % st["early_close"]) if st.get("early_close") else ""))
         if not st["open"] and st.get("next_open"):
             print("Next open: %s %s." % (st["next_open"], tz_lbl))
-        if not st["calendar_known"]:
-            yrs = tuple(p.get("calendar_years") or ())
-            print("Holiday list covers %s only: check idx.co.id for this date." % " and ".join(map(str, yrs)))
+        cal_note = market.calendar_note(p, st["date"])
+        if cal_note:
+            print(cal_note)
     return 0 if st["open"] else 1
 
 
@@ -579,6 +579,9 @@ def cmd_check(a):
         if rings:
             print("An alert is information, not an order. Check your broker app and record any fill "
                   "(ticket.py fill). To close a position yourself: ticket.py flatten, then trader-risk and your yes.")
+        cal_note = market.calendar_note(p, status["date"])
+        if cal_note:
+            print(cal_note)
     return 0 if rings else 1
 
 

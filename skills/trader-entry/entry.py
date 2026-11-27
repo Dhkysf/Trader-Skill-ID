@@ -685,9 +685,9 @@ def describe(res):
     if res.get("early_close"):
         out.append("Early close today (%s): no new entries after %s." % (
             res["early_close"], res["no_entries_after"]))
-    if not res.get("calendar_known"):
-        yrs = tuple(p.get("calendar_years") or ())
-        out.append("Holiday list covers %s only: check idx.co.id for this date." % " and ".join(map(str, yrs)))
+    cal_note = market.calendar_note(p, res["date"]) if res.get("date") else None
+    if cal_note:
+        out.append(cal_note)
     return out
 
 
@@ -749,7 +749,7 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
     delay_min = int(prof.get("data_delay_min") or 0)
     delay = delay_min * 60
     step = INTERVALS[opts.get("interval", "5m")]
-    printed, errors, said_preopen, said_delay, said_break, first = -1, 0, False, False, None, True
+    printed, errors, said_preopen, said_delay, said_break, said_cal, first = -1, 0, False, False, None, False, True
     next_fetch = None
     while True:
         now = clock()
@@ -758,6 +758,11 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
             continue
         local = market.to_local(prof, now)
         day = local.date()
+        cal_note = market.calendar_note(prof, day)
+        if not said_cal:
+            if cal_note:
+                emit(cal_note)
+            said_cal = True
         sess = market.sessions(prof, day)
         if not sess:
             emit("%s: market closed today (%s). Nothing to watch." % (day.isoformat(), trading_day(day, prof)[1]))
@@ -807,7 +812,7 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
                     printed = b["slot"]
         if res["status"] == "triggered":
             for line in lines[1:]:
-                if line.startswith("Opening range") or (line.startswith("TRIGGERED") and not fresh):
+                if line.startswith("Opening range") or (line.startswith("TRIGGERED") and not fresh) or line == cal_note:
                     continue
                 emit(line)
             if on_trigger:

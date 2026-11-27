@@ -757,6 +757,84 @@ class IdxRiskTest(unittest.TestCase):
         self.assertNotIn("ar_band", doc["mc"])
         self.assertIn("no ARA/ARB rule for 2026-11-26 in markets/idx.json; band not checked", doc["warnings"])
 
+    def test_calendar_note_ar_limits_wib_and_timemachine_holiday(self):
+        want = "IDX holidays for 2027 are not in markets/idx.json yet: holidays count as trading days. Add the official list."
+        self.assertIsNone(market.calendar_note(self.idx, "2026-11-23"))
+        self.assertEqual(market.calendar_note(self.idx, "2027-01-04"), want)
+
+        class FakeDateTime(datetime.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.datetime(2026, 10, 19, 18, 0, tzinfo=datetime.timezone.utc)
+
+        with mock.patch.object(market.datetime, "datetime", FakeDateTime):
+            got = market.ar_limits(self.idx, 1000)
+        self.assertEqual(got, (Decimal("930"), Decimal("1250")))
+
+        for bad_date, expected in (("2026-08-17", "IDX holiday"), ("2026-11-22", "weekend")):
+            with self.assertRaises(tm.TMError) as ctx:
+                tm.normalize_plan({
+                    "symbol": "BBCA", "side": "buy", "date": bad_date, "setup": "orb",
+                    "entry": 5875.0, "entry_time": "09:25 AM", "interval": "5m",
+                    "stop": 5825.0, "target": 5975.0, "market": "idx",
+                })
+            self.assertIn(expected, str(ctx.exception))
+
+        with tempfile.TemporaryDirectory() as td:
+            # scan.py daily
+            out = io.StringIO()
+            with redirect_stdout(out):
+                scan.main(["daily", "--offline", SPARK_DAILY, "--symbols", "BBCA", "--no-write", "--now", "2027-01-04 10:15"])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # scan.py orb
+            out = io.StringIO()
+            with redirect_stdout(out):
+                scan.main(["orb", "--offline", BBCA_5M, "--symbols", "BBCA", "--no-write", "--now", "2027-01-04 10:15"])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # entry.py check
+            out = io.StringIO()
+            with redirect_stdout(out):
+                entry.main(["check", "BBCA", "--offline", BBCA_5M, "--now", "2027-01-04 10:15"])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # entry.py watch
+            out = io.StringIO()
+            with redirect_stdout(out):
+                entry.main(["watch", "BBCA", "--offline", BBCA_5M, "--now", "2027-01-04 10:15", "--until", "10:20"])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # alerts.py check
+            rules_path = os.path.join(td, "alerts.json")
+            state_path = os.path.join(td, "state.json")
+            with open(rules_path, "w", encoding="utf-8") as fh:
+                json.dump({"rules": [{"id": "r1", "type": "time", "at": "15:45", "active": True}]}, fh)
+            out = io.StringIO()
+            with redirect_stdout(out):
+                alerts.main(["check", "--rules", rules_path, "--state", state_path, "--no-write", "--now", "2027-01-04 10:15"])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # exit.py plan
+            out = io.StringIO()
+            with redirect_stdout(out):
+                exitp.main([
+                    "plan", "--symbol", "BBCA", "--entry", "9900", "--stop", "price:9700",
+                    "--target", "1R", "--prev-close", "9800", "--now", "2027-01-04 10:15",
+                ])
+            self.assertEqual(out.getvalue().count(want), 1)
+
+            # timemachine.py run
+            out = io.StringIO()
+            with redirect_stdout(out):
+                tm.main([
+                    "run", "--symbol", "BBCA", "--date", "2026-11-26", "--entry", "5875",
+                    "--stop", "5825", "--target", "5975", "--entry-time", "09:25 AM",
+                    "--prev-close", "5825", "--offline", BBCA_5M, "--replays", "50",
+                    "--now", "2027-01-04 10:15",
+                ])
+            self.assertEqual(out.getvalue().count(want), 1)
+
     def test_short_margin_and_fee_inclusive_loss_blocks(self):
         short_ord = dict(self.order, side="sell")
         res_sh = check.check([short_ord], dict(self.cfg, allow_short=True), now=self._at("2026-11-23 10:15"))

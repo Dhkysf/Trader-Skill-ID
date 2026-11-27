@@ -107,6 +107,20 @@ def is_trading_day(p, d):
     return bool(p["sessions"].get(_WEEKDAYS[d.weekday()])) and d.isoformat() not in p.get("holidays", {})
 
 
+def calendar_note(p, day):
+    """Return a warning string when day.year is outside calendar_years, else None."""
+    years = p.get("calendar_years") or ()
+    if not years:
+        return None
+    d = datetime.date.fromisoformat(day) if isinstance(day, str) else _as_date(day)
+    if d.year in years:
+        return None
+    return (
+        "%s holidays for %d are not in markets/%s.json yet: holidays count as trading days. Add the official list."
+        % (p.get("exchange", "IDX"), d.year, p["id"])
+    )
+
+
 def sessions(p, d):
     """List of (open_time, close_time) tuples for `d`, [] on holidays/weekends, early close applied."""
     d = _as_date(d)
@@ -175,7 +189,8 @@ def ar_limits(p, reference_price, day=None):
     if not rules:
         return None
     if day is None:
-        d = datetime.date.today()
+        utc_now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        d = to_local(p, utc_now).date()
     elif isinstance(day, str):
         d = datetime.date.fromisoformat(day)
     else:

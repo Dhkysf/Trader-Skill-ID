@@ -690,6 +690,9 @@ def build_plan(a, now_utc):
     today = now_local.date()
     if day != today:
         warnings.append("This plan is for %s, not today (%s)." % (day.isoformat(), today.isoformat()))
+    cal_note = market.calendar_note(p, day) or market.calendar_note(p, today)
+    if cal_note:
+        warnings.append(cal_note)
     return plan, warnings
 
 
@@ -759,9 +762,13 @@ def cmd_show(a):
         return 0
     for line in describe(dict({"setup": "orb", "interval": "5m", "stop_label": "", "target_label": ""}, **plan), p=p):
         print(line)
-    today = market.to_local(p, parse_now(a.now, p=p)).date().isoformat()
+    today_d = market.to_local(p, parse_now(a.now, p=p)).date()
+    today = today_d.isoformat()
     if plan["date"] != today:
         print("Note: this plan is for %s, not today (%s)." % (plan["date"], today))
+    cal_note = market.calendar_note(p, plan["date"]) or market.calendar_note(p, today_d)
+    if cal_note:
+        print("Note: " + cal_note)
     return 0
 
 

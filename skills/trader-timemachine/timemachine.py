@@ -679,9 +679,15 @@ def normalize_plan(raw, src="flags", p=None):
         raise TMError("5-minute bars only (the plan says %s): Yahoo keeps 60 days of 5-min bars but only about "
                       "7 days of 1-min bars, too few sessions for a fair replay pool" % interval)
     try:
-        date = datetime.date.fromisoformat(str(raw.get("date") or "")).isoformat()
+        date_d = datetime.date.fromisoformat(str(raw.get("date") or ""))
+        date = date_d.isoformat()
     except ValueError:
         raise TMError("the plan needs a date like 2026-10-19, got %r" % raw.get("date"))
+    if not market.is_trading_day(prof, date_d):
+        ex = prof.get("exchange", "IDX")
+        name = (prof.get("holidays") or {}).get(date)
+        why = ("%s holiday: %s" % (ex, name)) if name else "weekend"
+        raise TMError("%s is not a trading day for %s (%s)" % (date, ex, why))
     sm = slot_map(prof, date)
     if sm["total"] == 0:
         raise TMError("%s is not a trading day for %s" % (date, prof.get("exchange", "market")))
@@ -857,6 +863,11 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     if not bars:
         raise TMError("no complete 5-minute bars for %s in the data" % sym)
     k = plan["entry_bar"]
+    if not market.is_trading_day(prof, datetime.date.fromisoformat(plan["date"])):
+        ex = prof.get("exchange", "IDX")
+        name = (prof.get("holidays") or {}).get(plan["date"])
+        why = ("%s holiday: %s" % (ex, name)) if name else "weekend"
+        raise TMError("%s is not a trading day for %s (%s)" % (plan["date"], ex, why))
     sm = slot_map(prof, plan["date"])
     if sm["total"] == 0:
         raise TMError("%s is not a trading day for %s" % (plan["date"], prof.get("exchange", "market")))
@@ -888,6 +899,11 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
                       % (clock24(sm["slots"][k]), plan["entry_time"], plan["date"], sym, reason))
     eb = entry_day[k]
     warn = []
+    cal_note = market.calendar_note(prof, plan["date"]) or market.calendar_note(
+        prof, market.to_local(prof, now_utc).date()
+    )
+    if cal_note:
+        warn.append(cal_note)
     if not eb["l"] - 0.01 <= plan["entry"] <= eb["h"] + 0.01:
         warn.append("the plan's entry %s is outside that bar's range %s to %s"
                     % (_px(plan["entry"], prof), _px(eb["l"], prof), _px(eb["h"], prof)))
@@ -1010,7 +1026,7 @@ def report(doc):
         lines.append("History: " + h.get("note", "skipped."))
     lines += ["", doc["verdict"]] + list(doc.get("verdict_notes") or []) + [""]
     for w in doc.get("warnings") or []:
-        lines.append("Note: " + w + ".")
+        lines.append("Note: " + (w if w.endswith(".") else w + "."))
     if doc["data"]["short_sessions_left_out"]:
         lines.append("Left out %d short session(s) (half days or gaps): %s."
                      % (len(doc["data"]["short_sessions_left_out"]),

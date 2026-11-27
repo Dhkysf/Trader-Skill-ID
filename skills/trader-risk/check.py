@@ -162,13 +162,12 @@ def window_check(now_local, c):
         return [], []
     p = market.from_config(c)
     tz = _tz_label(p)
-    cal_years = tuple(p.get("calendar_years", ()))
     holidays = p.get("holidays", {})
     warns = []
     d, t = now_local.date(), now_local.time().replace(second=0, microsecond=0)
-    if cal_years and d.year not in cal_years:
-        warns.append("the holiday list covers %s only: check idx.co.id for %s"
-                     % (" and ".join(map(str, cal_years)), d.isoformat()))
+    cal_note = market.calendar_note(p, d)
+    if cal_note:
+        warns.append(cal_note)
     stamp = now_local.strftime("%a %Y-%m-%d %H:%M")
     if not market.is_trading_day(p, d):
         name = holidays.get(d.isoformat())

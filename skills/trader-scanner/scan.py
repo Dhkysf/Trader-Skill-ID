@@ -842,6 +842,9 @@ def cmd_daily(a):
         doc["filters"]["min_value"] = min_value
     if delay:
         doc["delay_notice"] = delay
+    cal_note = market.calendar_note(p, market.to_local(p, now).date())
+    if cal_note:
+        doc["calendar_note"] = cal_note
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
     if not a.no_write:
@@ -879,6 +882,8 @@ def cmd_daily(a):
         print("Wrote %s (mode daily, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
     if delay:
         print(delay)
+    if cal_note:
+        print(cal_note)
     print(NOTE + " Next: pick one chart, then /trader-news TICKER.")
     return 0 if hits else 1
 
@@ -944,6 +949,9 @@ def cmd_orb(a):
            "filters": {"min_price": min_price, "min_volume": min_volume}, "note": NOTE, "hits": hits}
     if delay:
         doc["delay_notice"] = delay
+    cal_note = market.calendar_note(p, market.to_local(p, now).date())
+    if cal_note:
+        doc["calendar_note"] = cal_note
     if a.offline:
         doc["offline"] = os.path.basename(a.offline.rstrip("/"))
     if not a.no_write:
@@ -982,6 +990,8 @@ def cmd_orb(a):
         print("Wrote %s (mode orb, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
     if delay:
         print(delay)
+    if cal_note:
+        print(cal_note)
     print(NOTE + " Next: pick one chart, then /trader-news TICKER and /trader-entry TICKER.")
     return 0 if hits else 1
 
