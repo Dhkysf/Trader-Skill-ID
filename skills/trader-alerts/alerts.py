@@ -90,7 +90,7 @@ def _tz_label(p):
 
 
 def _money(x, p=None):
-    return market.money(p or _IDX, x)
+    return market.price(p or _IDX, x)
 
 
 def market_status(now_utc, p=None):
@@ -419,7 +419,7 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
             if hit and rid not in rung:
                 word = "at or above" if typ == "above" else "at or below"
                 label = {"stop": "stop", "target": "target"}.get(r["type"], "alert level")
-                lvl_s = market.money(prof, r["price"])
+                lvl_s = market.price(prof, r["price"])
                 rings.append({"id": rid, "symbol": sym, "message": "%s %s %s: %s your %s %s%s."
                               % (sym, "is" if status["open"] else "last", _money(px, prof), word, label, lvl_s,
                                  (" (" + r["note"] + ")") if r.get("note") else "")})

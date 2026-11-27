@@ -1563,7 +1563,7 @@ class IdxCoreParityTest(unittest.TestCase):
         self.assertIs(market.from_config(None), idx)
         self.assertIs(market.from_config({}), idx)
         self.assertEqual(market.money(idx, 64218.75), "Rp 64.219")
-        self.assertEqual(market.money({"currency": "EUR"}, 15000), "EUR 15,000")
+        self.assertEqual(market.money({"currency": "EUR"}, 15000), "EUR 15,000.00")
         self.assertEqual(market.fees(idx), (0.15, 0.25))
         with self.assertRaises(ValueError):
             market.fees(idx, {"buy_fee_pct": -0.1})

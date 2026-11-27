@@ -247,8 +247,30 @@ def from_config(cfg_or_path=None):
     return load("idx")
 
 
+def price_decimals(p):
+    """Number of decimal places for prices in profile `p` (default: 0 for IDR, else 2)."""
+    val = (p or {}).get("price_decimals")
+    if val is not None:
+        return int(val)
+    return 0 if (p or {}).get("currency", "IDR") == "IDR" else 2
+
+
+def price_tol(p, price=None):
+    """Tick-based comparison tolerance as Decimal: min(0.005, tick / 2)."""
+    prof = p or {}
+    if price is not None and (prof.get("tick_table") or prof.get("tick") is not None):
+        tick = tick_size(prof, price)
+    elif prof.get("tick_table"):
+        tick = min(Decimal(str(e["tick"])) for e in prof["tick_table"])
+    elif prof.get("tick") is not None:
+        tick = Decimal(str(prof["tick"]))
+    else:
+        tick = Decimal("10") ** -price_decimals(prof)
+    return min(Decimal("0.005"), tick / Decimal("2"))
+
+
 def money(p, amount):
-    """Format `amount` using profile `p`'s currency."""
+    """Format a money amount using profile `p`'s currency (IDR 0 dp, others 2 dp; never strips zeros)."""
     ccy = (p or {}).get("currency", "IDR")
     if ccy == "IDR":
         n = int(_to_decimal(amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
@@ -256,12 +278,27 @@ def money(p, amount):
             return "Rp 0"
         sign = "-" if n < 0 else ""
         return "%sRp %s" % (sign, "{:,}".format(abs(n)).replace(",", "."))
-    val = float(amount)
-    s = "{:,.2f}".format(val)
-    if s.endswith(".00"):
-        s = s[:-3]
-    if s == "-0":
-        s = "0"
+    d = _to_decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if d == 0:
+        d = Decimal("0.00")
+    s = "{:,.2f}".format(d)
+    prefix = _CURRENCY_PREFIX.get(ccy)
+    return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
+
+
+def price(p, x):
+    """Format a price `x` with profile `p`'s price_decimals (always fixed places; IDR as Rp)."""
+    ccy = (p or {}).get("currency", "IDR")
+    dec = price_decimals(p)
+    if ccy == "IDR" and dec == 0:
+        return money(p, x)
+    step = Decimal("1") if dec <= 0 else Decimal("10") ** -dec
+    d = _to_decimal(x).quantize(step, rounding=ROUND_HALF_UP)
+    if d == 0:
+        d = Decimal("0").quantize(step)
+    s = ("{:,." + str(dec) + "f}").format(d) if dec > 0 else "{:,}".format(int(d))
+    if dec > 2:
+        return s
     prefix = _CURRENCY_PREFIX.get(ccy)
     return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
 

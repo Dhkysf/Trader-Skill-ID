@@ -140,6 +140,10 @@ def _money(v, p=None):
     return market.money(p or _IDX, v)
 
 
+def _px(v, p=None):
+    return market.price(p or _IDX, v)
+
+
 def is_bracket(order):
     oc = str(order.get("order_class") or "").lower()
     legs = order.get("take_profit_limit_price") is not None or order.get("stop_loss_stop_price") is not None
@@ -148,9 +152,10 @@ def is_bracket(order):
 
 def max_loss(order, p=None, cfg=None, rv=None):
     """(dollars, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
+    out_dec = max(2, market.price_decimals(p))
     stop = _f(order.get("stop_loss_stop_price")) or _f((order.get("plan") or {}).get("stop"))
     if rv and _f(rv.get("max_loss")) is not None:
-        return round(_f(rv["max_loss"]), 2), _f(rv.get("stop")) or stop
+        return round(_f(rv["max_loss"]), out_dec), _f(rv.get("stop")) or stop
     q = _f(order.get("qty"))
     if not stop or not q:
         return None, stop
@@ -160,20 +165,18 @@ def max_loss(order, p=None, cfg=None, rv=None):
     if str(order.get("type", "market")) == "limit" and _f(order.get("limit_price")):
         entry = _f(order["limit_price"])
     elif _f(plan.get("max_loss")) is not None:
-        return round(_f(plan["max_loss"]), 2), stop
+        return round(_f(plan["max_loss"]), out_dec), stop
     else:
         entry = _f(plan.get("entry"))
     if not entry:
         return None, stop
+    d_e, d_s, d_q = market._to_decimal(entry), market._to_decimal(stop), market._to_decimal(q)
+    d_rps = abs(d_e - d_s)
     if has_fees:
-        d_e = market._to_decimal(entry)
-        d_s = market._to_decimal(stop)
-        d_b = market._to_decimal(buy_pct) / Decimal("100")
-        d_sl = market._to_decimal(sell_pct) / Decimal("100")
-        d_rps = abs(d_e - d_s) + d_e * d_b + d_s * d_sl
-        return float((d_rps * market._to_decimal(q)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)), stop
-    risk = abs(entry - stop)
-    return round(q * int(round(risk * 100)) / 100.0, 2), stop
+        d_rps += (d_e * market._to_decimal(buy_pct) / Decimal("100")
+                  + d_s * market._to_decimal(sell_pct) / Decimal("100"))
+    step = Decimal("10") ** -out_dec
+    return float((d_rps * d_q).quantize(step, rounding=ROUND_HALF_UP)), stop
 
 
 def plain_parts(order, p=None, cfg=None, rv=None):
@@ -191,14 +194,14 @@ def plain_parts(order, p=None, cfg=None, rv=None):
         qty_s = "%s shares" % _str_num(order.get("qty"))
     plan = order.get("plan") or {}
     entry = _f(order.get("limit_price")) if typ == "limit" else _f(plan.get("entry"))
-    entry_s = ("at %s" % _money(entry, prof)) if entry else "at market"
+    entry_s = ("at %s" % _px(entry, prof)) if entry else "at market"
     bits = ["%s %s %s %s" % (side, qty_s, sym, entry_s)]
     stop = _f(order.get("stop_loss_stop_price")) or _f(plan.get("stop"))
     target = _f(order.get("take_profit_limit_price")) or _f(plan.get("target"))
     if stop:
-        bits.append("stop %s" % _money(stop, prof))
+        bits.append("stop %s" % _px(stop, prof))
     if target:
-        bits.append("target %s" % _money(target, prof))
+        bits.append("target %s" % _px(target, prof))
     loss, _ = max_loss(order, p=prof, cfg=cfg, rv=rv)
     if loss is not None:
         bits.append("max loss incl. fees %s" % _money(loss, prof))
@@ -272,12 +275,16 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="t
     named = (tokens & others) | upper4
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
-    nums = [float(n.replace(".", "").replace(",", "")) if re.match(r"^\d{1,3}(?:\.\d{3})+$", n)
-            else float(n.replace(",", ""))
-            for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
+    if market.price_decimals(prof) == 0:
+        nums = [float(n.replace(".", "").replace(",", "")) if re.match(r"^\d{1,3}(?:\.\d{3})+$", n)
+                else float(n.replace(",", ""))
+                for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
+    else:
+        nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
         want = amount_numbers(order, p=p, cfg=cfg, rv=rv)
-        bad = [n for n in nums if not any(abs(n - w) < 0.005 for w in want)]
+        tol = float(market.price_tol(prof))
+        bad = [n for n in nums if not any(abs(n - w) < tol for w in want)]
         if bad:
             return False, "the reply says %s, which does not match this order (%s)" % (
                 ", ".join(_str_num(n) for n in bad), plain(order, p=p, cfg=cfg, rv=rv))
@@ -431,7 +438,7 @@ def log_fill(state_path, now, today, symbol, side, qty, price, p=None, fee=None)
     state = load_state(state_path)
     prof = p or _IDX
     sym = market.base_symbol(prof, symbol)
-    px_s = _money(price, prof)
+    px_s = _px(price, prof)
     entry = {
         "at": local_iso(now, p=p), "date": today, "status": "filled", "symbol": sym, "side": side,
         "qty": _str_num(float(qty)), "price": float(price),

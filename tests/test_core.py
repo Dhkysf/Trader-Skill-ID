@@ -14,6 +14,9 @@ from _load import FIX, ROOT, load
 market = load("trader-core", "market")
 size = load("trader-budget", "size")
 check = load("trader-risk", "check")
+entry = load("trader-entry", "entry")
+timemachine = load("trader-timemachine", "timemachine")
+ticket = load("trader-broker", "ticket")
 
 
 # Original reference implementation from skills/trader-scanner/scan.py
@@ -128,18 +131,18 @@ class CoreTest(unittest.TestCase):
 
     def test_money_formatting(self):
         usd = {"currency": "USD"}
-        self.assertEqual(market.money(usd, 50), "$50")
-        self.assertEqual(market.money(usd, 1250), "$1,250")
+        self.assertEqual(market.money(usd, 50), "$50.00")
+        self.assertEqual(market.money(usd, 1250), "$1,250.00")
         self.assertEqual(market.money(usd, 46.88), "$46.88")
-        self.assertEqual(market.money(usd, 0), "$0")
-        self.assertEqual(market.money(usd, -0.001), "$0")
+        self.assertEqual(market.money(usd, 0), "$0.00")
+        self.assertEqual(market.money(usd, -0.001), "$0.00")
         idx = market.load("idx")
         self.assertEqual(market.money(idx, 15000), "Rp 15.000")
         self.assertEqual(market.money(idx, 9875000), "Rp 9.875.000")
         self.assertEqual(market.money(idx, 64218.75), "Rp 64.219")
         self.assertEqual(market.money(idx, 0), "Rp 0")
         self.assertEqual(market.money(idx, -0.001), "Rp 0")
-        self.assertEqual(market.money({"currency": "EUR"}, 15000), "EUR 15,000")
+        self.assertEqual(market.money({"currency": "EUR"}, 15000), "EUR 15,000.00")
         self.assertEqual(market.fees(idx), (0.15, 0.25))
         self.assertEqual(market.fees(idx, {"buy_fee_pct": 0.1, "sell_fee_pct": 0.0}), (0.1, 0.0))
         with self.assertRaises(ValueError):
@@ -185,6 +188,99 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(market.base_symbol(idx, ".JK"), ".JK")
         self.assertEqual(market.base_symbol(idx, None), "")
         self.assertEqual(market.base_symbol({"yahoo_suffix": ""}, "BRK.B"), "BRK.B")
+
+
+class PrecisionTest(unittest.TestCase):
+    def _use_fx_profile(self):
+        mods = [market]
+        if "market" in sys.modules and sys.modules["market"] is not market:
+            mods.append(sys.modules["market"])
+        prof_dir = os.path.join(FIX, "profiles")
+        for m in mods:
+            orig_dir = m.MARKETS_DIR
+            orig_cache = dict(m._CACHE)
+            m.MARKETS_DIR = prof_dir
+            self.addCleanup(setattr, m, "MARKETS_DIR", orig_dir)
+            self.addCleanup(lambda mod=m, snap=orig_cache: (mod._CACHE.clear(), mod._CACHE.update(snap)))
+        return market.load("fx-test")
+
+    def _fx_cfg(self):
+        return {
+            "market": "fx-test",
+            "budget": 10000,
+            "max_loss_per_trade": 100,
+            "max_position_pct": 100,
+            "cash_buffer_pct": 0,
+            "min_reward_risk": 1.5,
+            "min_order": 1,
+        }
+
+    def _fx_plan(self):
+        return {
+            "symbol": "EUR.US",
+            "side": "buy",
+            "market": "fx-test",
+            "date": "2026-11-23",
+            "setup": "orb",
+            "entry": 1.0850,
+            "stop": 1.0820,
+            "target": 1.0910,
+        }
+
+    def test_fx_size_and_risk_pass(self):
+        self._use_fx_profile()
+        cfg = self._fx_cfg()
+        plan = self._fx_plan()
+        s = size.size_trade(plan, cfg, today="2026-11-23")
+        self.assertGreater(s["qty"], 0)
+        self.assertEqual(s["reward_risk"], 2.0)
+        self.assertEqual(s["risk_per_share"], 0.003)
+        order = size.bracket_order(s)
+        self.assertIsNotNone(order)
+        res = check.check([order], cfg, today="2026-11-23")
+        self.assertEqual(res["results"][0]["verdict"], "PASS", res["results"][0]["reasons"])
+        self.assertEqual(res["results"][0]["entry_ref"], 1.085)
+        self.assertEqual(res["results"][0]["reward_risk"], 2.0)
+
+    def test_fx_ticket_format_and_parse_yes(self):
+        fx = self._use_fx_profile()
+        cfg = self._fx_cfg()
+        s = size.size_trade(self._fx_plan(), cfg, today="2026-11-23")
+        order = size.bracket_order(s)
+        text = ticket.plain(order, p=fx, cfg=cfg)
+        self.assertIn("1.08500", text)
+        self.assertIn("1.08200", text)
+        self.assertIn("1.09100", text)
+        self.assertIn("$", text)
+        ok_yes, _ = ticket.parse_yes("yes 1.085", order, p=fx, cfg=cfg)
+        self.assertTrue(ok_yes)
+        ok_bad, _ = ticket.parse_yes("yes 1.084", order, p=fx, cfg=cfg)
+        self.assertFalse(ok_bad)
+
+    def test_price_vs_money_formatters(self):
+        fx = self._use_fx_profile()
+        idx = market.load("idx")
+        self.assertEqual(market.price(fx, 1.0), "1.00000")
+        self.assertEqual(market.price(fx, 1.085), "1.08500")
+        self.assertEqual(market.price(idx, 9875), "Rp 9.875")
+        self.assertEqual(market.money(fx, 10000), "$10,000.00")
+        self.assertEqual(market.money(fx, 31.2), "$31.20")
+        self.assertEqual(market.money(idx, 9875000), "Rp 9.875.000")
+
+    def test_fx_entry_and_timemachine_precision(self):
+        fx = self._use_fx_profile()
+        self.assertEqual(entry.r2(1.0850, 5), 1.085)
+        raw_plan = dict(self._fx_plan(), entry_time="00:30")
+        norm = timemachine.normalize_plan(raw_plan, p=fx)
+        self.assertEqual(norm["risk_per_share"], 0.003)
+        pool = [[] if i == 0 else [(1.0, 1.0005, 0.9995, 1.0001)] for i in range(10)]
+        sim = timemachine.simulate(pool, 1.0850, 1.0820, 1.0910, 1, 9, replays=20, seed=19, price_decimals=5)
+        self.assertGreater(sim["median_close"], 1.0)
+        self.assertNotEqual(sim["median_close"], round(sim["median_close"], 2))
+        self.assertEqual(len(str(sim["sample_paths"][0][1]).split(".")[1]) <= 5, True)
+
+    def test_fx_profile_cleanup_no_leak(self):
+        self.assertNotIn("fx-test", market.available())
 
 
 if __name__ == "__main__":

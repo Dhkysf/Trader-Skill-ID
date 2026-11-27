@@ -112,7 +112,7 @@ def _place_label(p=None):
 
 
 def _px(x, p=None):
-    return market.money(p or _IDX, x)
+    return market.price(p or _IDX, x)
 
 
 def _delay_notice(p=None):
@@ -446,7 +446,7 @@ def pct(a, q):
 
 
 def simulate(pool, entry, stop, target, k, last, replays=10000, seed=19, window=2, side="buy",
-             slot_info=None, ar_band=None):
+             slot_info=None, ar_band=None, price_decimals=2):
     """Monte Carlo replays of bars k+1..last. Same draws and order as the reel's sim.py."""
     long = side == "buy"
     risk = (entry - stop) if long else (stop - entry)
@@ -500,7 +500,7 @@ def simulate(pool, entry, stop, target, k, last, replays=10000, seed=19, window=
                         outcome = "target"
             p = cl
             if keep:
-                path.append(round(p, 2))
+                path.append(round(p, price_decimals))
         if hit_ar:
             ar_hits += 1
         outcomes.append(outcome or "close")
@@ -530,7 +530,7 @@ def simulate(pool, entry, stop, target, k, last, replays=10000, seed=19, window=
     bands = []
     for j in range(last - k + 1):
         col = sorted(pp[j] for pp in allp)
-        bands.append([round(pct(col, q), 2) for q in BAND_Q])
+        bands.append([round(pct(col, q), price_decimals) for q in BAND_Q])
     lo_, hi_ = pct(srt, 0.01), pct(srt, 0.99)
     W = (hi_ - lo_) / HIST_BINS
     bins = [0] * HIST_BINS
@@ -542,10 +542,10 @@ def simulate(pool, entry, stop, target, k, last, replays=10000, seed=19, window=
         "replays": replays, "seed": seed, "window": window, "bars_left": last - k,
         "p_target": round(cnt["target"] / replays, 4), "p_stop": round(cnt["stop"] / replays, 4),
         "p_neither": round(cnt["close"] / replays, 4), "p_green": round(green / replays, 4),
-        "median_close": round(pct(srt, 0.5), 2), "p5_close": round(pct(srt, 0.05), 2),
-        "p95_close": round(pct(srt, 0.95), 2), "avg_R": round(statistics.mean(Rs), 3),
+        "median_close": round(pct(srt, 0.5), price_decimals), "p5_close": round(pct(srt, 0.05), price_decimals),
+        "p95_close": round(pct(srt, 0.95), price_decimals), "avg_R": round(statistics.mean(Rs), 3),
         "r_at_target": r_target, "band_paths": BAND_PATHS, "bands": bands, "sample_paths": paths,
-        "hist": {"lo": round(lo_, 2), "hi": round(hi_, 2), "bins": bins},
+        "hist": {"lo": round(lo_, price_decimals), "hi": round(hi_, price_decimals), "bins": bins},
     }
     if ar_band is not None:
         out["ar_hits"] = ar_hits
@@ -744,10 +744,11 @@ def normalize_plan(raw, src="flags", p=None):
     if or_min < 5 or or_min % 5 or or_min >= sm["session_counts"][0] * 5:
         raise TMError("opening_range.minutes must be a multiple of 5 (got %s)" % or_min)
     risk = (entry - stop) if long else (stop - entry)
+    pdec = max(2, market.price_decimals(prof))
     out = {
         "symbol": sym, "side": side, "date": date, "setup": str(raw.get("setup") or "orb"),
         "entry": entry, "entry_time": clock12(sm["slots"][k] + 5), "entry_bar": k,
-        "stop": stop, "target": target, "risk_per_share": round(risk, 2),
+        "stop": stop, "target": target, "risk_per_share": round(risk, pdec),
         "target_r": round(((target - entry) if long else (entry - target)) / risk, 2),
         "opening_range": dict(orng, minutes=or_min) if isinstance(orng, dict) else {"minutes": or_min},
         "stop_rule": str(raw.get("stop_rule") or "auto"), "interval": "5m",
@@ -776,9 +777,10 @@ def resolve_rule(plan, entry_day, p=None):
         rule["stop_rule"] = "pct"
         if all(i in entry_day for i in range(n)):
             oh, ol = opening_range(entry_day, n)
-            if abs(_tick_away(prof, (oh + ol) / 2, long) - plan["stop"]) < 0.005:
+            tol = float(market.price_tol(prof, plan["stop"]))
+            if abs(_tick_away(prof, (oh + ol) / 2, long) - plan["stop"]) < tol:
                 rule["stop_rule"] = "or_mid"
-            elif abs(_tick_away(prof, ol if long else oh, long) - plan["stop"]) < 0.005:
+            elif abs(_tick_away(prof, ol if long else oh, long) - plan["stop"]) < tol:
                 rule["stop_rule"] = far
     elif rule["stop_rule"] in ("or_low", "or_high") and rule["stop_rule"] != far:
         rule["stop_rule"] = "pct"
@@ -908,7 +910,8 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     )
     if cal_note:
         warn.append(cal_note)
-    if not eb["l"] - 0.01 <= plan["entry"] <= eb["h"] + 0.01:
+    tol = float(market.price_tol(prof, plan["entry"])) * 2
+    if not eb["l"] - tol <= plan["entry"] <= eb["h"] + tol:
         warn.append("the plan's entry %s is outside that bar's range %s to %s"
                     % (_px(plan["entry"], prof), _px(eb["l"], prof), _px(eb["h"], prof)))
     sessions, short = full_sessions(days, plan["date"], p=prof)
@@ -936,7 +939,8 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
         else:
             ar_band = (float(lo_d), float(hi_d))
     mc = simulate(pool, plan["entry"], plan["stop"], plan["target"], k, last, replays, seed, window,
-                  plan["side"], slot_info=sm, ar_band=ar_band)
+                  plan["side"], slot_info=sm, ar_band=ar_band,
+                  price_decimals=max(2, market.price_decimals(prof)))
     mc = dict(mc, until=clock24(until_min), pool_sessions=len(sessions), pool_from=sessions[0][0],
               pool_to=sessions[-1][0],
               band_times=[clock24(sm["slots"][j] + 5) for j in range(k, last + 1)])
@@ -1045,10 +1049,12 @@ def report(doc):
 def render_chart(doc, height=17):
     """ASCII fan chart of the bands: one column per 5-min bar."""
     p, m = doc["plan"], doc["mc"]
+    prof = market.load(p["market"]) if p.get("market") else _IDX
+    dec = max(2, market.price_decimals(prof))
     bands, times = m["bands"], m["band_times"]
     lo = min([b[0] for b in bands] + [p["stop"], p["target"]])
     hi = max([b[4] for b in bands] + [p["stop"], p["target"]])
-    pad = (hi - lo) * 0.04 or 0.01
+    pad = (hi - lo) * 0.04 or float(market.price_tol(prof, hi)) * 2
     lo, hi = lo - pad, hi + pad
     step = (hi - lo) / (height - 1)
 
@@ -1069,10 +1075,11 @@ def render_chart(doc, height=17):
         grid[r] = ["-" if ch == " " else ch for ch in grid[r]]
     out = ["%s %s, %s replay paths from the %s entry (seed %d)" % (
         p["symbol"], p["date"], "{:,}".format(m.get("band_paths", BAND_PATHS)), p["entry_time"], m["seed"])]
+    fmt = "%%9.%df |" % dec
     for r in range(height):
         label = marks.get(r)
         price = {"target": p["target"], "stop": p["stop"], "entry": p["entry"]}.get(label, hi - r * step)
-        left = ("%9.2f |" % price) if (label or r in (0, height - 1)) else "          |"
+        left = (fmt % price) if (label or r in (0, height - 1)) else "          |"
         out.append(left + "".join(grid[r]) + ("  " + label if label else ""))
     axis = [" "] * len(bands)
     for j in sorted({0, len(bands) // 2, len(bands) - 1}):

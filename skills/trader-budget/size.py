@@ -273,10 +273,14 @@ def shares_for(usd, per_share, lot=1):
 
 
 def _px(x, p=None):
-    return money(x, p)
+    return market.price(p or _IDX, x)
 
 
 def _ord_price(x, p=None):
+    dec = market.price_decimals(p)
+    if dec > 0:
+        return ("{:." + str(dec) + "f}").format(
+            market._to_decimal(x).quantize(Decimal("10") ** -dec, rounding=ROUND_HALF_UP))
     f = float(x)
     return str(int(round(f))) if abs(f - round(f)) < 1e-9 else str(x)
 
@@ -305,6 +309,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "idx"
     p = market.load(market_id)
     c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
+    dec = market.price_decimals(p)
+    out_dec = max(2, dec)
+    tol = float(market.price_tol(p))
     lot = int(p.get("lot", 1))
     buy_fee_pct, sell_fee_pct = market.fees(p, c)
     has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
@@ -349,19 +356,20 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if target <= ref:
         raise SizeError("the target %s is not above the entry %s: the move has already happened. "
                         "Skip it or make a new plan with trader-exit" % (_px(target, p), _px(ref, p)))
-    risk_c = int(round((ref - stop) * 100))
-    reward_c = int(round((target - ref) * 100))
-    risk = float(market._to_decimal(ref) - market._to_decimal(stop))
     d_entry = market._to_decimal(ref)
     d_stop = market._to_decimal(stop)
+    d_target = market._to_decimal(target)
+    d_risk = d_entry - d_stop
+    d_reward = d_target - d_entry
+    risk = float(d_risk)
     d_buy = market._to_decimal(buy_fee_pct) / Decimal("100")
     d_sell = market._to_decimal(sell_fee_pct) / Decimal("100")
-    risk_per_share_net = (d_entry - d_stop) + d_entry * d_buy + d_stop * d_sell
+    risk_per_share_net = d_risk + d_entry * d_buy + d_stop * d_sell
 
     cash_buffer = round(budget * buf_pct / 100.0, 2)
     available = budget - cash_buffer
     cash_note = "budget %s minus the %s cash buffer" % (money(budget, p), money(cash_buffer, p))
-    if cash is not None and cash - cash_buffer < available - 0.005:
+    if cash is not None and cash - cash_buffer < available - tol:
         available = cash - cash_buffer
         cash_note = "cash %s in trader/portfolio.json minus the %s buffer" % (money(cash, p), money(cash_buffer, p))
     available = max(round(available, 2), 0.0)
@@ -404,11 +412,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     bound = [l["name"] for l in limits if l["shares"] == qty]
     for l in limits:
         l["binds"] = l["name"] == bound[0]
-    cost = round(qty * ref, 2)
-    if has_fees:
-        loss = float((risk_per_share_net * qty).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-    else:
-        loss = round(qty * risk_c / 100.0, 2)
+    money_q = Decimal("10") ** -out_dec
+    cost = round(float(d_entry * qty), out_dec)
+    loss = float(((risk_per_share_net if has_fees else d_risk) * qty).quantize(money_q, rounding=ROUND_HALF_UP))
     refusal = None
     if qty == 0:
         if lot > 1:
@@ -426,22 +432,22 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         elif bound[0] == "max loss":
             refusal = ("one share risks %s (entry %s minus stop %s), more than your %s max loss per trade. "
                        "No order. Skip this trade, or plan a closer stop with trader-exit."
-                       % (money(risk, p), _px(ref, p), _px(stop, p), money(max_loss, p)))
+                       % (_px(risk, p), _px(ref, p), _px(stop, p), money(max_loss, p)))
         else:
             refusal = ("one share of %s costs %s, more than your %s limit (%s). No order."
-                       % (sym, money(ref, p), bound[0], limits[[l["name"] for l in limits].index(bound[0])]["how"]))
-    elif _f(c.get("min_reward_risk")) and reward_c < _f(c["min_reward_risk"]) * risk_c - EPS:
+                       % (sym, _px(ref, p), bound[0], limits[[l["name"] for l in limits].index(bound[0])]["how"]))
+    elif _f(c.get("min_reward_risk")) and (d_reward / d_risk) < market._to_decimal(c["min_reward_risk"]) - Decimal("1e-9"):
         refusal = ("reward:risk %.2f (target %s, entry %s, stop %s) is under your minimum %s, so trader-risk "
                    "would block it. No order. Skip it, or make a new plan with trader-exit."
-                   % (reward_c / float(risk_c), _px(target, p), _px(ref, p), _px(stop, p), _num(c["min_reward_risk"])))
-    elif cost < float(c.get("min_order") or 0) - 0.005:
+                   % (float(d_reward / d_risk), _px(target, p), _px(ref, p), _px(stop, p), _num(c["min_reward_risk"])))
+    elif cost < float(c.get("min_order") or 0) - tol:
         refusal = ("%d share%s of %s is %s, under your %s minimum order. No order."
                    % (qty, "" if qty == 1 else "s", sym, money(cost, p), money(c["min_order"], p)))
     out = {
         "symbol": sym, "side": "buy", "setup": plan.get("setup", ""), "date": plan.get("date"),
         "entry_time": plan.get("entry_time", ""), "entry_plan": _norm(entry_plan),
         "entry": ref, "entry_from": ref_from, "stop": stop, "target": target,
-        "risk_per_share": risk, "reward_risk": round(reward_c / float(risk_c), 2),
+        "risk_per_share": risk, "reward_risk": round(float(d_reward / d_risk), 2),
         "stop_label": plan.get("stop_label", ""), "target_label": plan.get("target_label", ""),
         "budget": budget, "cash_buffer_pct": buf_pct, "cash_buffer": cash_buffer, "cash_available": available,
         "max_loss_per_trade_usd": max_loss, "limits": limits, "qty": qty, "bound_by": bound[0],

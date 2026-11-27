@@ -47,6 +47,7 @@
   },
   "calendar_years": [2026],
   "currency": "IDR",
+  "price_decimals": 0,
   "lot": 100,
   "min_price": 1,
   "yahoo_suffix": ".JK",

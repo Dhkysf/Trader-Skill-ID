@@ -114,7 +114,7 @@ def _exchange(p):
 
 
 def _px(val, p=None):
-    return market.money(p or _IDX, val)
+    return market.price(p or _IDX, val)
 
 
 def _profile_defaults(p=None):
@@ -381,8 +381,8 @@ def read_config(path):
     return cfg
 
 
-def r2(x):
-    return None if x is None else round(float(x), 2) + 0.0   # + 0.0 turns -0.0 into 0.0
+def r2(x, dec=2):
+    return None if x is None else round(float(x), dec) + 0.0   # + 0.0 turns -0.0 into 0.0
 
 
 def early_cutoff(day, t, close_dt, open_t, std_close):
@@ -406,6 +406,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         if v is not None:
             eff_cfg[k] = v
     delay_min = int(prof.get("data_delay_min") or 0)
+    pdec = max(2, market.price_decimals(prof))
     cal_years = tuple(prof.get("calendar_years") or ())
     early_dates = (prof.get("early_close") or {}).get("dates") or {}
 
@@ -483,12 +484,12 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
                 bars.append(b)
             else:
                 pending = b
-                res["forming"] = {"bar_start": hm(b["et"]), "closes": ampm(b["end"]), "price": r2(b["c"])}
+                res["forming"] = {"bar_start": hm(b["et"]), "closes": ampm(b["end"]), "price": r2(b["c"], pdec)}
                 res["lag_note"] = ("Yahoo's last trade is %s, before the %s bar's close: it counts once Yahoo "
                                    "catches up (a minute at most)" % (market.to_local(prof, utc_of(dt)).strftime("%H:%M:%S"),
                                                                        short(b["et"])))
         elif b["et"] <= local:
-            res["forming"] = {"bar_start": hm(b["et"]), "closes": ampm(b["end"]), "price": r2(b["c"])}
+            res["forming"] = {"bar_start": hm(b["et"]), "closes": ampm(b["end"]), "price": r2(b["c"], pdec)}
     res["_bars"] = bars
     res["bars_closed"] = len(bars)
 
@@ -501,7 +502,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     or_bars = [b for b in bars if b["slot"] < n_or]
     avg_vol = (sum(b["v"] for b in or_bars) / float(len(or_bars))) if or_bars else None
     if or_bars:
-        res["opening_range"] = {"high": r2(max(b["h"] for b in or_bars)), "low": r2(min(b["l"] for b in or_bars)),
+        res["opening_range"] = {"high": r2(max(b["h"] for b in or_bars), pdec), "low": r2(min(b["l"] for b in or_bars), pdec),
                                 "minutes": or_minutes, "bars": len(or_bars), "of": n_or,
                                 "complete": local >= or_end, "avg_volume": int(round(avg_vol))}
     if setup == "orb":
@@ -515,7 +516,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         lvl = max(b["h"] for b in or_bars)
     else:
         lvl = float(level)
-    res["level"] = r2(lvl)
+    res["level"] = r2(lvl, pdec)
 
     first_slot = n_or if setup == "orb" else 0
     trig, thin, pre_break = None, [], []
@@ -535,7 +536,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
             break
     last = bars[-1] if bars else None
     if last:
-        res["last"] = {"bar_start": hm(last["et"]), "close": r2(last["c"]),
+        res["last"] = {"bar_start": hm(last["et"]), "close": r2(last["c"], pdec),
                        "vs_level_pct": r2(100.0 * (last["c"] / lvl - 1))}
 
     if trig:
@@ -543,7 +544,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         res.update(status="triggered", phase="open" if local < close_dt else "after-close",
                    reason="the %s bar closed above %s" % (short(trig["et"]), "the range high" if setup == "orb" else "the level"))
         res["trigger"] = {"time": ampm(trig["end"]), "close_time": hm(trig["end"]), "bar_start": hm(trig["et"]),
-                          "bar_index": trig["slot"], "price": r2(trig["c"]), "close": trig["c"],
+                          "bar_index": trig["slot"], "price": r2(trig["c"], pdec), "close": trig["c"],
                           "volume": trig["v"], "volume_x": r2(vx), "pct_over": r2(100.0 * (trig["c"] / lvl - 1))}
         res["minutes_since"] = int((local - trig["end"]).total_seconds() // 60)
         if dt and utc_of(dt) < market.local_to_utc(prof, trig["end"]):
@@ -747,6 +748,7 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
     prof = market.from_config((opts or {}).get("cfg"))
     tz_lbl = _tz_label(prof)
     delay_min = int(prof.get("data_delay_min") or 0)
+    pdec = max(2, market.price_decimals(prof))
     delay = delay_min * 60
     step = INTERVALS[opts.get("interval", "5m")]
     printed, errors, said_preopen, said_delay, said_break, said_cal, first = -1, 0, False, False, None, False, True

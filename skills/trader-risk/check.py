@@ -86,7 +86,6 @@ TIFS = {"day", "gtc", "opg", "cls", "ioc", "fok"}
 OCC = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
 TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
-CENT = 0.005
 FRESH_MINUTES = 15
 REF_WORDS = {"plan": "the plan's entry", "price": "the latest price", "limit": "the limit price",
              "stop price": "the stop price", "stale price": "an old price"}
@@ -142,7 +141,7 @@ def _tz_label(p):
 
 
 def _px(x, p=None):
-    return money(x, p)
+    return market.price(p or _IDX, x)
 
 
 def _defaults_for(p):
@@ -297,6 +296,9 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     p = market.from_config(cfg)
     c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
+    dec = market.price_decimals(p)
+    out_dec = max(2, dec)
+    tol = float(market.price_tol(p))
     lot = int(p.get("lot", 1))
     buy_fee_pct, sell_fee_pct = market.fees(p, c)
     has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
@@ -419,7 +421,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             cands = [(p, w) for p, w in ((plan_entry, "plan"), (live, "price")) if p]
             if cands:
                 ref, ref_from = max(cands, key=lambda x: x[0])
-                if live and ref_from == "price" and plan_entry and live > plan_entry + CENT:
+                if live and ref_from == "price" and plan_entry and live > plan_entry + float(market.price_tol(p, plan_entry)):
                     info.append("%s last %s is above the plan's entry %s: the risk is measured from %s"
                                 % (sym, _px(ref, p), _px(plan_entry, p), _px(ref, p)))
             elif sym in prices:
@@ -450,7 +452,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             for label, v in tick_checks:
                 if not market.valid_tick(p, v):
                     reasons.append("tick: %s %s is not on a valid IDX tick (tick size %s at this price)"
-                                   % (label, money(v, p), money(market.tick_size(p, v), p)))
+                                   % (label, _px(v, p), _px(market.tick_size(p, v), p)))
         if notional is not None and _f(notional):
             value = _f(notional)
         elif q:
@@ -465,7 +467,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             if q is not None:
                 exiting = q <= held + 1e-9
             elif value is not None:
-                exiting = value <= held_value + CENT
+                exiting = value <= held_value + tol
         elif side == "buy" and held < -1e-9 and q is not None:
             exiting = q <= -held + 1e-9
         kind = "exit" if exiting else "entry"
@@ -477,10 +479,10 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         if sym in blocked:
             later.append("blocked: %s is on your blocked list" % sym)
         if value is not None:
-            if value < float(c.get("min_order") or 0) - CENT:
+            if value < float(c.get("min_order") or 0) - tol:
                 later.append("size: %s is under your %s minimum order"
                              % (money(value, p), money(c["min_order"], p)))
-            if c.get("max_order") and value > float(c["max_order"]) + CENT:
+            if c.get("max_order") and value > float(c["max_order"]) + tol:
                 later.append("size: %s is over your %s max order"
                              % (money(value, p), money(c["max_order"], p)))
 
@@ -496,19 +498,19 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         if value is not None and side == "buy" and kind == "entry":
             cash_need = value + buy_fee
             after_cash = cash - cash_need
-            if after_cash < -CENT:
+            if after_cash < -tol:
                 if c.get("allow_margin"):
                     later.append("cash: needs %s but only %s cash; margin orders are not allowed on IDX"
                                  % (money(cash_need, p), money(cash, p)))
                 else:
                     later.append("cash: needs %s but only %s cash; that would be margin (borrowed money)"
                                  % (money(cash_need, p), money(cash, p)))
-            elif after_cash < buffer_usd - CENT:
+            elif after_cash < buffer_usd - tol:
                 later.append("cash: leaves %s cash, under your %s%% buffer of %s"
                              % (money(max(after_cash, 0), p), _pct(c["cash_buffer_pct"]), money(buffer_usd, p)))
             pos_after = held_value + value
             limit = total * float(c.get("max_position_pct") or 100) / 100.0
-            if total > 0 and pos_after > limit + CENT:
+            if total > 0 and pos_after > limit + tol:
                 later.append("position: %s would be %s, %.1f%% of the %s account, over your %s%% cap"
                              % (sym, money(pos_after, p), 100.0 * pos_after / total, money(total, p),
                                 _pct(c["max_position_pct"])))
@@ -516,7 +518,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             if q is not None:
                 over = q > held + 1e-9
             elif value is not None:
-                over = value > held_value + CENT
+                over = value > held_value + tol
             else:
                 over = held <= 0
             if over:
@@ -534,7 +536,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             leg_stop, plan_stop = _f(o.get("stop_loss_stop_price")), _f(plan.get("stop"))
             stop = leg_stop if leg_stop else plan_stop
             target = _f(o.get("take_profit_limit_price")) or _f(plan.get("target"))
-            if leg_stop and plan_stop and abs(leg_stop - plan_stop) > CENT:
+            if leg_stop and plan_stop and abs(leg_stop - plan_stop) > float(market.price_tol(p, leg_stop)):
                 warns.append("the bracket stop %s differs from the plan's stop %s: the bracket's is the one "
                              "the broker uses" % (_px(leg_stop, p), _px(plan_stop, p)))
             if stop and not leg_stop:
@@ -547,25 +549,27 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                 else:
                     warns.append("no stop: the max loss is not capped, so it is not counted in the daily loss")
             elif ref:
-                if (long and stop >= ref - CENT) or (not long and stop <= ref + CENT):
+                d_ref = market._to_decimal(ref)
+                d_stop = market._to_decimal(stop)
+                d_ptol = market.price_tol(p, ref)
+                if (long and d_stop >= d_ref - d_ptol) or (not long and d_stop <= d_ref + d_ptol):
                     later.append("stop: the stop %s must be %s the entry %s for a %s"
                                  % (_px(stop, p), "below" if long else "above", _px(ref, p), side))
                 else:
-                    risk_c = int(round(abs(ref - stop) * 100))
-                    risk_ps = float(abs(market._to_decimal(ref) - market._to_decimal(stop)))
+                    d_risk = abs(d_ref - d_stop)
+                    risk_ps = float(d_risk)
                     shares = q if q is not None else ((value or 0) / ref)
+                    loss_step = Decimal("10") ** -out_dec
                     if has_fees:
-                        d_ref = market._to_decimal(ref)
-                        d_stop = market._to_decimal(stop)
                         d_buy = market._to_decimal(buy_fee_pct) / Decimal("100")
                         d_sell = market._to_decimal(sell_fee_pct) / Decimal("100")
-                        d_rps = abs(d_ref - d_stop) + d_ref * d_buy + d_stop * d_sell
-                        max_loss = float((d_rps * market._to_decimal(shares)).quantize(
-                            Decimal("0.01"), rounding=ROUND_HALF_UP))
+                        d_rps = d_risk + d_ref * d_buy + d_stop * d_sell
                     else:
-                        max_loss = round(shares * risk_ps, 2)
+                        d_rps = d_risk
+                    max_loss = float((d_rps * market._to_decimal(shares)).quantize(
+                        loss_step, rounding=ROUND_HALF_UP))
                     cap = _f(c.get("max_loss_per_trade"))
-                    if cap and max_loss > cap + CENT:
+                    if cap and max_loss > cap + tol:
                         if has_fees:
                             later.append("loss: %s shares max loss incl. fees = %s at the stop, over your %s max loss "
                                          "per trade" % (_num(shares), money(max_loss, p), money(cap, p)))
@@ -574,11 +578,13 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                                          "per trade" % (_num(shares), _px(risk_ps, p), money(max_loss, p), money(cap, p)))
                     min_rr = _f(c.get("min_reward_risk"))
                     if target:
-                        if (long and target <= ref + CENT) or (not long and target >= ref - CENT):
+                        d_target = market._to_decimal(target)
+                        if (long and d_target <= d_ref + d_ptol) or (not long and d_target >= d_ref - d_ptol):
                             later.append("target: the target %s must be %s the entry %s"
                                          % (_px(target, p), "above" if long else "below", _px(ref, p)))
                         else:
-                            rr = round(int(round(abs(target - ref) * 100)) / float(risk_c), 2)
+                            d_reward = abs(d_target - d_ref)
+                            rr = round(float(d_reward / d_risk), 2)
                             if min_rr and rr < min_rr - 1e-9:
                                 later.append("reward:risk: %.2f (target %s, entry %s, stop %s) is under your "
                                              "minimum %s" % (rr, _px(target, p), _px(ref, p), _px(stop, p), _num(min_rr)))
@@ -602,18 +608,18 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                                 continue
                             if v < arb_f - 1e-9:
                                 later.append("ar_band: %s %s is below today's ARB %s (ref %s; band %s to %s)"
-                                             % (label, money(v, p), money(arb_f, p), money(pc, p),
-                                                money(arb_f, p), money(ara_f, p)))
+                                             % (label, _px(v, p), _px(arb_f, p), _px(pc, p),
+                                                _px(arb_f, p), _px(ara_f, p)))
                             elif v > ara_f + 1e-9:
                                 later.append("ar_band: %s %s is above today's ARA %s (ref %s; band %s to %s)"
-                                             % (label, money(v, p), money(ara_f, p), money(pc, p),
-                                                money(arb_f, p), money(ara_f, p)))
+                                             % (label, _px(v, p), _px(ara_f, p), _px(pc, p),
+                                                _px(arb_f, p), _px(ara_f, p)))
                 else:
                     warns.append("no prev_close for %s: could not check today's ARA/ARB band" % sym)
             daily = _f(c.get("max_daily_loss"))
             if daily and max_loss is not None:
                 used = loss_today + batch_loss
-                if used + max_loss > daily + CENT:
+                if used + max_loss > daily + tol:
                     later.append("daily loss: %s already at risk today plus %s for this one = %s, over your %s "
                                  "daily loss limit" % (money(used, p), money(max_loss, p), money(used + max_loss, p),
                                                        money(daily, p)))
@@ -684,8 +690,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         results.append({
             "index": i, "symbol": sym, "side": side, "kind": kind,
             "amount": money(_f(notional) or 0, p) if notional is not None else ("%s shares" % qty),
-            "value_usd": round(value, 2) if value is not None else None,
-            "entry_ref": round(ref, 2) if ref else None, "entry_ref_from": ref_from,
+            "value_usd": round(value, out_dec) if value is not None else None,
+            "entry_ref": round(ref, out_dec) if ref else None, "entry_ref_from": ref_from,
             "stop": stop, "target": target, "risk_per_share": risk_ps, "max_loss": max_loss,
             "reward_risk": rr, "fingerprint": fingerprint(o), "verdict": verdict,
             "reasons": reasons, "warnings": warns, "info": info,

@@ -1,0 +1,35 @@
+{
+  "id": "fx-test",
+  "name": "Test FX Profile (EURUSD-like)",
+  "exchange": "FX",
+  "timezone": "utc",
+  "tz_label": "UTC",
+  "utc_offset_std": 0,
+  "utc_offset_dst": 0,
+  "dst": null,
+  "sessions": {
+    "mon": [["00:00", "23:55"]],
+    "tue": [["00:00", "23:55"]],
+    "wed": [["00:00", "23:55"]],
+    "thu": [["00:00", "23:55"]],
+    "fri": [["00:00", "23:55"]]
+  },
+  "defaults": {
+    "no_entries_before": null,
+    "no_entries_after": null,
+    "flat_by": null,
+    "no_entries_before_break_min": 0
+  },
+  "holidays": {},
+  "currency": "USD",
+  "price_decimals": 5,
+  "tick": 0.00001,
+  "lot": 1,
+  "min_price": 0.00001,
+  "yahoo_suffix": "",
+  "data_delay_min": 0,
+  "fees": {
+    "buy_fee_pct": 0,
+    "sell_fee_pct": 0
+  }
+}

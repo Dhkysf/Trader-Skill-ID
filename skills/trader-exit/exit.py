@@ -91,7 +91,7 @@ def _place_label(p):
 
 
 def _money(x, p=None):
-    return market.money(p or _IDX, float(x))
+    return market.price(p or _IDX, float(x))
 
 
 def _raw_money(x, p=None):
@@ -285,9 +285,10 @@ def compute(entry, stop_rule, stop_param, target_rule, target_param, or_high=Non
                         % (_money(risk, prof), _money(min_tick_risk, prof), _money(e, prof)))
     floor_risk = e * MIN_RISK_PCT / 100
     if risk < floor_risk:
+        floor_q = Decimal("10") ** -max(2, market.price_decimals(prof))
         raise PlanError("the stop is %s under the entry, less than 0.05%% of the price (%s on %s): too tight to "
                         "survive the spread, normal wiggle would stop you out. Widen it."
-                        % (_money(risk, prof), _money(floor_risk.quantize(CENT, rounding=ROUND_HALF_UP), prof),
+                        % (_money(risk, prof), _money(floor_risk.quantize(floor_q, rounding=ROUND_HALF_UP), prof),
                            _money(e, prof)))
     if target_rule == "r":
         raw_target = e + target_param * risk
@@ -669,7 +670,7 @@ def build_plan(a, now_utc):
         if pc > 0:
             plan["prev_close"] = float(pc)
     if atr is not None:
-        plan["atr"] = round(atr, 4)
+        plan["atr"] = round(atr, max(4, market.price_decimals(p)))
         plan["atr_bars"] = atr_n
     warnings = []
     if flat_note:

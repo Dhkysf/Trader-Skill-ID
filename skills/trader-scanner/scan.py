@@ -145,7 +145,7 @@ def _delay_line(p):
 
 
 def _fmt_price(x, p=None):
-    return market.money(p or _IDX, x)
+    return market.price(p or _IDX, x)
 
 
 def trading_day(d, p=None):
