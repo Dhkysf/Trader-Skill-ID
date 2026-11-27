@@ -1,34 +1,54 @@
 # Trader Skill ID
 
-Agent skills for day-trading analysis in Google Antigravity: Indonesian stocks (IDX) today, forex next.
+English: [README.en.md](README.en.md)
 
-Free, MIT, no signup, no API key. The tools are plain Python that read free
-public data: Yahoo Finance charts and Indonesian RSS news feeds.
+Asisten analisis day-trading di Google Antigravity untuk trader Indonesia: saham Indonesia (IDX/BEI) dan spot forex 24/5.
 
-One scans thousands of charts for setups. Another tracks breaking news on
-every stock you watch. One watches a setup bar by bar and tells you the moment
-to get in, and another sets your stop and your target before you do. And the
-craziest one is the Time Machine: before you risk any money, it replays the
-rest of the session 10,000 times from the stock's own recent bars, plus every
-past day the same setup fired, and tells you the honest odds.
+Gratis, lisensi MIT, tanpa daftar akun, tanpa API key. Semua skrip memakai Python standar (3.8+) yang membaca data publik: grafik Yahoo Finance dan feed RSS keuangan Indonesia.
 
-And no trade goes through until you say yes. Nothing in this pack can place
-an order on its own. Paper trading is the default.
+Satu skill memindai ribuan grafik untuk mencari setup. Skill lain memantau berita terbaru. Ada yang mengawasi candle demi candle untuk momen masuk, ada yang memasang stop dan target sebelum Anda masuk, dan Time Machine memutar ulang sisa sesi 10.000 kali dari data 60 hari terakhir sebelum Anda mempertaruhkan uang.
 
-## Install
+Tidak ada order yang berjalan tanpa persetujuan Anda. Semua order selalu manual, dengan paper trading sebagai bawaan.
 
-**(a) Recommended: a dedicated trading folder (Antigravity IDE)**
+## Istilah singkat
 
-The skills write working files (`watchlist.json`, `plan.json`, `orders.json`, `state/`) into `trader\` inside your current folder. Using a dedicated folder keeps trading state out of your code repos.
+- **ORB (Opening-Range Breakout)**: penembusan harga di atas atau di bawah rentang harga pembukaan (bawaan 15 menit pertama).
+- **Stop (stop-loss)**: batas harga keluar otomatis jika skenario gagal, untuk membatasi rugi.
+- **R**: satuan risiko awal per transaksi (1R = jarak dari harga masuk ke stop; 2R = dua kali jarak tersebut).
+- **ARA/ARB**: Auto Rejection Atas / Bawah, batas kenaikan dan penurunan harga harian saham di IDX.
+- **Pip**: satuan gerak harga terkecil di pasangan forex (0,0001 untuk EURUSD; 0,01 untuk USDJPY; 1 untuk USDIDR).
+- **Lot**: satuan ukuran transaksi (100 lembar saham di IDX; 100.000 unit mata uang dasar di forex, minimum 0,01 lot).
 
-In PowerShell, copy the skills into your trading folder's `.agents\skills\` directory:
+## Daftar skill
+
+| Perintah | Tugas | Pasar | Fungsi |
+| --- | --- | --- | --- |
+| `/trader-scanner` | Pemindai Grafik | IDX, Forex | Mencari setup harian dan breakout rentang pembukaan (ORB). |
+| `/trader-news` | Pemantau Berita | IDX (RSS + harga), Forex (harga) | Memantau berita RSS Indonesia dan pergerakan harga harian. |
+| `/trader-entry` | Penentu Masuk | IDX, Forex | Mengawasi candle demi candle dan memberi tanda saat harga tutup menembus level. |
+| `/trader-exit` | Perencana Keluar | IDX, Forex | Menentukan stop dan target sebelum masuk, termasuk cek tick dan ARA/ARB. |
+| `/trader-timemachine` | Time Machine | IDX, Forex | Simulasi 10.000 sesi + riwayat aturan yang sama pada 60 hari terakhir. |
+| `/trader-budget` | Pengatur Modal | IDX, Forex | Menghitung ukuran lot sesuai batas rugi maksimal per transaksi. |
+| `/trader-risk` | Pemeriksa Risiko | IDX, Forex | Mengecek setiap order terhadap aturan Anda: PASS atau BLOCK dengan alasan. |
+| `/trader-broker` | Tiket Manual | IDX, Forex | Menampilkan tiket order manual, mencatat persetujuan "yes" dan hasil fill. |
+| `/trader-alerts` | Pengingat Harga | IDX, Forex | Berbunyi saat harga, stop, target, bel buka, atau waktu tutup tercapai. |
+
+Modul bersama: `/trader-core` - aturan pasar, jam bursa, hari libur, dan pembulatan tick dari `markets/*.json`.
+
+## Instalasi (Google Antigravity)
+
+**(a) Disarankan: folder trading khusus (Antigravity IDE)**
+
+Setiap skill menulis file kerja (`watchlist.json`, `plan.json`, `orders.json`, `state/`) ke dalam folder `trader\` di direktori kerja Anda. Memakai folder khusus menjaga file trading terpisah dari repositori kode.
+
+Di PowerShell, salin skill ke `.agents\skills\` di folder trading Anda:
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "E:\Projects\Trading-Lab\.agents\skills"
 Copy-Item -Recurse -Force ".\skills\trader-*" "E:\Projects\Trading-Lab\.agents\skills\"
 ```
 
-(Use any dedicated folder path you prefer.) Open that folder in Google Antigravity, start a new chat, and run `/trader-news BBCA`.
+Buka folder tersebut di Google Antigravity, mulai chat baru, lalu jalankan `/trader-news BBCA`.
 
 **(b) Antigravity CLI (`agy`)**
 
@@ -36,153 +56,82 @@ Copy-Item -Recurse -Force ".\skills\trader-*" "E:\Projects\Trading-Lab\.agents\s
 agy plugin install https://github.com/Dhkysf/Trader-Skill-ID
 ```
 
-The tools need Python 3.8 or newer. Nothing to pip install.
+Membutuhkan Python 3.8 atau lebih baru. Tidak perlu `pip install`.
 
-## The nine
+Untuk konfigurasi awal, salin contoh konfigurasi ke `trader\config.json`:
+- IDX: `skills\trader-budget\config.example.json`
+- Forex: `skills\trader-budget\config.fx.example.json`
 
-| command | job | what it does |
-| --- | --- | --- |
-| `/trader-scanner` | Chart Scanner | Scans thousands of charts for setups: opening-range breakouts, flags, oversold bounces. |
-| `/trader-news` | News Monitor | Tracks breaking news on every stock you watch and flags what moves it. |
-| `/trader-entry` | Entry Timer | Watches a setup bar by bar and tells you the moment to get in. |
-| `/trader-exit` | Exit Planner | Sets your stop and your target before you enter, so you know when to get out. |
-| `/trader-timemachine` | Time Machine | Replays every possible outcome of a trade before you risk money: 10,000 simulated sessions plus every past time the setup fired. |
-| `/trader-risk` | Risk Manager | Checks every trade against your limits and stops anything over them. |
-| `/trader-budget` | Budget Manager | Sizes every position to your budget and your max loss per trade. |
-| `/trader-broker` | Order Executor | Renders manual order tickets and logs your explicit yes and fills, never without your yes. |
-| `/trader-alerts` | Price Alerts | Rings when a price, a stop or the opening bell hits. |
+## Cara kerja dan perintah
 
-Shared module: `/trader-core` - shared market rules used by the other skills.
+Semua skill saling berbagi file di folder `trader\`:
 
-## How to use it
-
-Everything lands in a `trader/` folder in your project, and each skill reads
-what the last one wrote:
-
-```
-scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker   (one trade)
-alerts: stop, target, flat by the close                                       (while it is open)
-news                                                                           (on a schedule)
+```text
+scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker   (satu transaksi)
+alerts: stop, target, tutup sebelum pasar tutup                                (saat posisi terbuka)
+news                                                                           (terjadwal)
 ```
 
-An example on IDX: BBCA, Monday November 23 2026, real data (WIB).
-
-1. **`/trader-scanner`** at 09:35 WIB: BBCA closed above its 15-minute opening
-   range (09:00-09:15, Rp 5.425 to Rp 5.500): the 09:30 candle closed at
-   Rp 5.550 (+0.91%).
-2. **`/trader-news`**: checks Indonesian RSS feeds (`news_feeds` in
-   `trader/config.json`) for BBCA headlines in WIB and shows today's price
-   move vs yesterday's close.
-3. **`/trader-entry`** watches BBCA bar by bar (5-minute bars, Yahoo `.JK`
-   data is about 10 minutes late) and flags the first closed bar above the
-   range high.
-4. **`/trader-exit`** sets the plan before the entry: stop rounded down to the
-   IDX tick (e.g. Rp 9.700), target (e.g. 2R at Rp 10.200), flat by 15:45 WIB
-   either way, and warns if the plan holds through the lunch break or hits
-   today's ARA/ARB band.
-5. **`/trader-timemachine`** replays the rest of the day 10,000 times from
-   BBCA's own 5-minute bars over the previous 60 days (seed 19, separate
-   Mon-Thu and Friday slot maps, lunch-gap isolation, ARA/ARB clamping) plus
-   every past session the same rule fired.
-6. **`/trader-budget`** with a Rp 10.000.000 account and Rp 100.000 max loss
-   per trade: sizes in whole lots of 100 shares, including buy/sell broker
-   fees, and writes one manual order to `trader/orders.json`.
-7. **`/trader-risk`** checks it against your limits: lot size, IDX tick table,
-   ARA/ARB band, lunch break, pre-closing, max loss incl. fees, daily loss,
-   trades per day, reward:risk, and cash. PASS or BLOCK, with the reason.
-8. **`/trader-broker`** shows you the manual ticket in plain words. You type
-   yes for that exact order, enter it in your broker app yourself, and record
-   the fill.
-9. **`/trader-alerts`** rings on the stop, the target and at 15:45 WIB to
-   flatten whatever is still open.
-
-## The tools
-
-All standard-library Python. The data tools read public endpoints and are
-polite about it. Commands below use `python` on Windows (use `python3` and `/`
-on macOS/Linux):
+Perintah Python langsung (Windows PowerShell; gunakan `python3` dan `/` di macOS/Linux):
 
 ```powershell
-python skills\trader-scanner\scan.py universe --from data\daftar-saham.csv   # IDX Daftar Saham -> trader/universe.txt
-python skills\trader-scanner\scan.py daily                                   # pre-market setups, whole universe
-python skills\trader-scanner\scan.py orb --at 10:15                          # opening-range breakouts so far (WIB)
-python skills\trader-news\news.py --tickers BBCA --hours 12                  # RSS headlines, today's move
-python skills\trader-entry\entry.py check BBCA --setup orb                   # waiting / triggered / expired
-python skills\trader-entry\entry.py watch BBCA --every 30                    # bar by bar until it triggers
-python skills\trader-exit\exit.py plan --stop or-mid --target 1R --write     # -> trader/plan.json
-python skills\trader-timemachine\timemachine.py run --write                  # 10,000 replays + the history
-python skills\trader-budget\size.py --write                                  # -> trader/orders.json
-python skills\trader-risk\check.py                                           # PASS / BLOCK per order
-python skills\trader-broker\ticket.py show                                   # the tickets, READY or not
-python skills\trader-alerts\alerts.py add --from-plan                        # stop, target, flat by close
-python skills\trader-alerts\alerts.py check                                  # rings what hit, once
+python skills\trader-scanner\scan.py universe --from data\daftar-saham.csv
+python skills\trader-scanner\scan.py daily
+python skills\trader-scanner\scan.py orb --at 10:15
+python skills\trader-scanner\scan.py orb --session london
+python skills\trader-news\news.py --tickers BBCA --hours 12
+python skills\trader-entry\entry.py check BBCA --setup orb
+python skills\trader-entry\entry.py watch BBCA --every 30
+python skills\trader-exit\exit.py plan --stop or-mid --target 1R --write
+python skills\trader-timemachine\timemachine.py run --write
+python skills\trader-budget\size.py --write
+python skills\trader-risk\check.py
+python skills\trader-broker\ticket.py show
+python skills\trader-alerts\alerts.py add --from-plan
+python skills\trader-alerts\alerts.py check
 ```
+
+Menjalankan tes offline:
 
 ```powershell
 .\check.bat nopause
 python -m unittest discover -s tests -v
 ```
 
-The tests run offline, on IDX fixtures cut from real data (BBCA, BBRI, TLKM,
-GOTO, and CNBC Indonesia RSS).
+## Data dan keterlambatan
 
-## Fine print
+- **Saham IDX (Yahoo Finance `.JK`)**: data terlambat sekitar 10 menit.
+- **Forex (Yahoo Finance `=X`)**: data bersifat real-time (keterlambatan 0 menit).
+- **Gratis dan tidak resmi**: endpoint Yahoo Finance bukan API resmi; data bisa melambat, berubah, atau terkena batas permintaan (rate-limit). Selalu periksa harga langsung di aplikasi broker Anda sebelum bertindak.
 
-**Not financial advice.** This is software that reads public data and does
-arithmetic. It does not know your situation and it cannot see the future.
-Most people who day trade lose money. You can lose money. Decide for
-yourself, and talk to a licensed professional if you need advice.
+## Aturan berubah
 
-**No trade goes through until you say yes.** Only `/trader-broker` can lead to
-an order, and only after `/trader-risk` passes that exact order and you type
-yes for it in the chat. Set your brokerage order tool to `ask` in Antigravity
-permissions, never `allow`, so the agent's own permission prompt is a second
-check. Never use Turbo mode in a trading workspace. No options, margin, short
-selling or leverage unless you turn them on.
+Aturan pasar disimpan di `skills\trader-core\markets\`, bukan di dalam skrip:
 
-**Paper first.** `"paper": true` and `"broker": "manual"` are the defaults in
-`config.example.json`. IDX orders are entered manually in your broker app.
+- **Batas ARA/ARB IDX**: di `skills\trader-core\markets\idx.json`, aturan saat ini berlaku sampai `valid_until` (`2026-12-31`, Peraturan II-A, Kep-00158/BEI/10-2026). Perbarui bagian `auto_rejection` jika BEI mengubah aturan.
+- **Hari libur IDX tahunan**: daftar `holidays` dan `calendar_years` (`[2026]`) di `skills\trader-core\markets\idx.json` perlu diperbarui setiap tahun sesuai pengumuman BEI.
+- **Profil Forex**: daftar pair, spread bawaan, dan aturan DST berada di `skills\trader-core\markets\fx.json`.
 
-**The Time Machine is a simulation, not a prediction.** It is built from the
-stock's own last 60 days of 5-minute bars. The future can do things those 60
-days never did: an earnings report, a halt, a headline. Treat its odds as a
-reality check, never as a promise.
+## Ketentuan penting
 
-**A stop is a plan, not a guarantee.** In a fast market or across a gap, a
-stop order can fill well past its price. The max loss shown is the loss at
-the stop price.
+**Bukan saran investasi / bukan nasihat keuangan.** Perangkat lunak ini hanya membaca data publik dan melakukan perhitungan. Ia tidak mengetahui kondisi keuangan Anda dan tidak bisa meramal masa depan. Sebagian besar pelaku day trading mengalami kerugian. Anda bisa kehilangan uang. Putuskan sendiri, dan konsultasikan dengan penasihat berlisensi jika membutuhkan nasihat.
 
-**The data is free and unofficial.** Yahoo Finance's chart endpoint is not an
-official API: it can lag, change or rate-limit you. The scanner and the entry
-timer read 1-minute or 5-minute bars, not every tick. Check anything that
-matters against your broker before you act on it.
+**Tidak ada order yang berjalan tanpa persetujuan "yes" dari Anda.** Hanya `/trader-broker` yang menyiapkan tiket order, dan hanya setelah `/trader-risk` memberi status PASS serta Anda mengetik `yes` secara eksplisit untuk order tersebut. Semua order selalu manual: Anda sendiri yang memasukkannya ke aplikasi broker. Set izin tool order di Antigravity ke `ask` (jangan `allow`), dan jangan gunakan mode Turbo di workspace trading.
 
-**Taxes.** Nothing here is tax advice.
+**Paper trading sebagai bawaan.** `"paper": true` dan `"broker": "manual"` adalah bawaan di `config.example.json` maupun `config.fx.example.json`.
 
-## Files
+**Forex hanya dengan broker berizin Bappebti.** Untuk transaksi forex, gunakan hanya pialang berjangka yang berizin dan diawasi oleh Bappebti (periksa daftar resmi di situs Bappebti sebelum menyetor dana).
 
-```
-.antigravity-plugin/plugin.json
-skills/
-  trader-core/        SKILL.md, market.py, markets/idx.json
-  trader-scanner/     SKILL.md, scan.py
-  trader-news/        SKILL.md, news.py
-  trader-entry/       SKILL.md, entry.py
-  trader-exit/        SKILL.md, exit.py
-  trader-timemachine/ SKILL.md, timemachine.py
-  trader-risk/        SKILL.md, check.py
-  trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
-  trader-broker/      SKILL.md, ticket.py
-  trader-alerts/      SKILL.md, alerts.py, alerts.example.json
-tests/                unittest suite + offline fixtures
-```
+**Time Machine adalah simulasi, bukan prediksi.** Hasilnya dibangun dari data 5 menit 60 hari terakhir. Masa depan bisa memunculkan hal baru seperti laporan keuangan, suspensi (halt), atau berita mendadak.
 
-## Credits
+**Stop adalah rencana, bukan jaminan.** Saat pasar bergerak cepat atau terjadi gap (termasuk jeda istirahat siang IDX), harga eksekusi bisa lebih buruk dari harga stop.
 
-Based on [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.
+**Pajak.** Tidak ada bagian dari perangkat ini yang merupakan saran pajak.
 
-## Ringkasan (Bahasa Indonesia)
+## Kredit
 
-Trader Skill ID adalah paket skill agen untuk analisis day-trading di Google Antigravity: saham Indonesia (IDX) saat ini, dan forex berikutnya. Ini bukan nasihat keuangan; semua keputusan transaksi tetap di tangan Anda dan tidak ada order yang dikirim tanpa persetujuan eksplisit. Data pasar yang digunakan bersifat gratis, tidak resmi, dan dapat tertunda.
+Berdasarkan [Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.
+
+## Lisensi
 
 MIT.
