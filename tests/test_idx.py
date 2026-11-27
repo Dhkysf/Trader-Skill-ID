@@ -879,6 +879,35 @@ class IdxBrokerTest(unittest.TestCase):
             with open(pf2, encoding="utf-8") as fh:
                 self.assertEqual(json.load(fh)["cash"], 10000000 - 2962500 - 5000)
 
+    def test_parse_yes_strict_numbers_and_tickers(self):
+        with open(BBCA_PLAN, encoding="utf-8") as fh:
+            plan = json.load(fh)
+        cfg = {"market": "idx", "budget": 10000000, "max_loss_per_trade": 75000}
+        order = size.bracket_order(size.size_trade(plan, cfg, today="2026-11-23"))
+        idx = market.load("idx")
+
+        with tempfile.TemporaryDirectory() as d:
+            uni_p = os.path.join(d, "universe.txt")
+            with open(uni_p, "w", encoding="utf-8") as fh:
+                fh.write("BBRI|PT Bank Rakyat Indonesia (Persero) Tbk.\nBELI|PT Global Digital Niaga Tbk.\n")
+
+            ok1, why1 = ticket.parse_yes("yes 10 lots BBCA at 9875", order, p=idx, cfg=cfg, universe_path=uni_p)
+            self.assertFalse(ok1)
+            self.assertIn("10", why1)
+
+            ok2, why2 = ticket.parse_yes("yes BBRI", order, p=idx, cfg=cfg, universe_path=uni_p)
+            self.assertFalse(ok2)
+            self.assertIn("BBRI", why2)
+            self.assertIn("BBCA", why2)
+
+            ok3, why3 = ticket.parse_yes("yes bbri", order, p=idx, cfg=cfg, universe_path=uni_p)
+            self.assertFalse(ok3)
+            self.assertIn("BBRI", why3)
+
+            for reply in ("yes please", "yes gas", "Yes, 3 lots BBCA", "yes beli 3 lot"):
+                ok, why = ticket.parse_yes(reply, order, p=idx, cfg=cfg, universe_path=uni_p)
+                self.assertTrue(ok, "%r should pass, got: %s" % (reply, why))
+
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):
     def test_determinism_on_bbca(self):

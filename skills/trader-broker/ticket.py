@@ -57,6 +57,9 @@ YES_WORDS = ("yes", "y")
 BATCH_WORDS = {"all", "every", "everything", "rest", "remaining", "them", "both", "batch", "each"}
 DOUBT_WORDS = {"no", "not", "dont", "don't", "wait", "cancel", "stop", "but", "maybe", "later",
                "hold", "unless", "if"}
+UPPER_ALLOW = {"SELL", "LOTS", "GOOD", "FINE", "THIS", "THAT", "ONLY", "JUST", "DONE", "PASS",
+               "PLAN", "CASH", "LIVE", "REAL"}
+ORDINARY_LOWER = {"beli", "jual", "gas", "please", "lot", "lots", "buy", "sell", "yes", "siap"}
 
 
 class TicketError(Exception):
@@ -236,7 +239,22 @@ def amount_numbers(order, p=None, cfg=None):
     return nums
 
 
-def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None):
+def _universe_symbols(path, prof):
+    if not path or not os.path.isfile(path):
+        return set()
+    syms = set()
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            code = s.split("|", 1)[0].split(",", 1)[0].strip()
+            if code:
+                syms.add(market.base_symbol(prof, code))
+    return syms
+
+
+def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="trader/universe.txt"):
     """Is this reply an explicit yes for THIS one order? Returns (ok, why)."""
     raw = (reply or "").strip()
     if not raw:
@@ -252,9 +270,12 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None):
         return False, "the reply has a condition or a doubt in it; ask again"
     prof = p or _IDX
     sym = market.base_symbol(prof, order.get("symbol"))
-    tokens = {market.base_symbol(prof, tok) for tok in re.findall(r"[A-Z][A-Z.\-]{0,6}", raw.upper())}
-    others = {market.base_symbol(prof, s) for s in batch_symbols} - {sym}
-    named = tokens & others
+    upper4 = {market.base_symbol(prof, tok) for tok in re.findall(r"\b[A-Z]{4}(?:\.[A-Z]{2})?\b", raw)} - {sym} - UPPER_ALLOW
+    others = ({market.base_symbol(prof, s) for s in batch_symbols if s} | _universe_symbols(universe_path, prof)) - {sym}
+    tokens = {market.base_symbol(prof, tok)
+              for tok in re.findall(r"\b[A-Za-z][A-Za-z0-9.\-]{0,8}\b", raw)
+              if tok.isupper() or tok.lower() not in ORDINARY_LOWER}
+    named = (tokens & others) | upper4
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
     nums = [float(n.replace(".", "").replace(",", "")) if re.match(r"^\d{1,3}(?:\.\d{3})+$", n)
@@ -262,9 +283,10 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None):
             for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
         want = amount_numbers(order, p=p, cfg=cfg)
-        if not any(abs(n - w) < 0.005 for n in nums for w in want):
-            return False, "the reply says %s, but this order is %s" % (
-                ", ".join(_str_num(n) for n in nums), plain(order, p=p, cfg=cfg))
+        bad = [n for n in nums if not any(abs(n - w) < 0.005 for w in want)]
+        if bad:
+            return False, "the reply says %s, which does not match this order (%s)" % (
+                ", ".join(_str_num(n) for n in bad), plain(order, p=p, cfg=cfg))
     return True, "explicit yes for %s" % plain(order, p=p, cfg=cfg)
 
 
@@ -483,7 +505,8 @@ def cmd_approve(a):
     ready, label, rv = status_of(order, risk, state, today)
     if not ready:
         raise TicketError("order %d is not ready: %s" % (a.index, label))
-    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders], p=p, cfg=cfg)
+    ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders], p=p, cfg=cfg,
+                        universe_path=os.path.join(os.path.dirname(a.orders) or "trader", "universe.txt"))
     if not ok:
         print("Not recorded: %s. Ask the user again with the ticket for order %d." % (why, a.index))
         return 1
