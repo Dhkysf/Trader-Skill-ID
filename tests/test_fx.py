@@ -251,6 +251,19 @@ class FxCliTest(unittest.TestCase):
         )
         self.assertEqual((reasons, warns), ([], []))
 
+    def test_scanner_cli_fx_short_wording(self):
+        r = self._run_cli(
+            "trader-scanner", "scan.py",
+            ["orb", "--session", "london", "--offline", FX_DIR, "--now", "2026-11-26 05:00"],
+            {"market": "fx", "allow_short": True},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("closed below the range low", r.stdout)
+        self.assertIn("under", r.stdout)
+        self.assertIn("short", r.stdout)
+        self.assertNotIn("closed above their opening-range high", r.stdout)
+        self.assertNotIn("% over", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

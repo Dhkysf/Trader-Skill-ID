@@ -1015,19 +1015,44 @@ def cmd_orb(a):
     if counts["unconfirmed"]:
         print("PARTIAL: %s more candidates were not checked (only the %s most traded are; --max-confirm 0 "
               "checks all)." % ("{:,}".format(counts["unconfirmed"]), "{:,}".format(a.max_confirm)))
-    if hits:
-        print("%d of %s charts closed above their opening-range high by %s:"
+    if not allow_short:
+        if hits:
+            print("%d of %s charts closed above their opening-range high by %s:"
+                  % (len(hits), ("the %s checked" % "{:,}".format(counts["confirmed"])) if counts["unconfirmed"]
+                     else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
+            for h in hits[:a.show]:
+                side_tag = ("  " + h["side"].upper()) if h.get("side") else ""
+                print("  %8s  %-6s%s %10s  range %s to %s  %+.2f%% over" % (
+                    h["at"], h["symbol"], side_tag, _fmt_price(h["price"], p, symbol=h["symbol"]),
+                    _fmt_price(h["or_low"], p, symbol=h["symbol"]), _fmt_price(h["or_high"], p, symbol=h["symbol"]), h["pct_over"]))
+            if len(hits) > a.show:
+                print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
+        else:
+            print("No chart closed above its opening-range high by %s." % clock_label(cutoff))
+    elif hits:
+        n_long = sum(1 for h in hits if h.get("side") != "sell")
+        n_short = sum(1 for h in hits if h.get("side") == "sell")
+        side_parts = []
+        if n_long:
+            side_parts.append("%d long" % n_long)
+        if n_short:
+            side_parts.append("%d short" % n_short)
+        print("%d of %s charts broke out of their opening range by %s (%s):"
               % (len(hits), ("the %s checked" % "{:,}".format(counts["confirmed"])) if counts["unconfirmed"]
-                 else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
+                 else "{:,}".format(counts["scanned"]), clock_label(cutoff), ", ".join(side_parts)))
         for h in hits[:a.show]:
-            side_tag = ("  " + h["side"].upper()) if h.get("side") else ""
-            print("  %8s  %-6s%s %10s  range %s to %s  %+.2f%% over" % (
-                h["at"], h["symbol"], side_tag, _fmt_price(h["price"], p, symbol=h["symbol"]),
-                _fmt_price(h["or_low"], p, symbol=h["symbol"]), _fmt_price(h["or_high"], p, symbol=h["symbol"]), h["pct_over"]))
+            if h.get("side") == "sell":
+                print("  %8s  %-6s  SELL %10s  range %s to %s  closed below the range low, %.2f%% under" % (
+                    h["at"], h["symbol"], _fmt_price(h["price"], p, symbol=h["symbol"]),
+                    _fmt_price(h["or_low"], p, symbol=h["symbol"]), _fmt_price(h["or_high"], p, symbol=h["symbol"]), h["pct_over"]))
+            else:
+                print("  %8s  %-6s  BUY  %10s  range %s to %s  closed above the range high, %+.2f%% over" % (
+                    h["at"], h["symbol"], _fmt_price(h["price"], p, symbol=h["symbol"]),
+                    _fmt_price(h["or_low"], p, symbol=h["symbol"]), _fmt_price(h["or_high"], p, symbol=h["symbol"]), h["pct_over"]))
         if len(hits) > a.show:
             print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     else:
-        print("No chart closed above its opening-range high by %s." % clock_label(cutoff))
+        print("No chart broke out of its opening range by %s." % clock_label(cutoff))
     if not a.no_write:
         print("Wrote %s (mode orb, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
     if delay:
