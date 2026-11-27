@@ -264,16 +264,12 @@ def fresh_price(doc, sym, now_utc, minutes=FRESH_MINUTES, p=None):
 
 def shares_for(usd, per_share, lot=1):
     """Whole shares that fit in usd at per_share (or whole lots when lot > 1)."""
-    if int(lot) > 1:
-        u = market._to_decimal(usd)
-        per = market._to_decimal(per_share) * int(lot)
-        if per <= 0 or u <= 0:
-            return 0
-        return int(u // per) * int(lot)
-    u, p = int(round(float(usd) * 100)), int(round(float(per_share) * 100))
-    if p <= 0 or u <= 0:
+    lot_i = max(1, int(lot))
+    u = market._to_decimal(usd)
+    per = market._to_decimal(per_share) * lot_i
+    if per <= 0 or u <= 0:
         return 0
-    return u // p
+    return int(u // per) * lot_i
 
 
 def _px(x, p=None):
@@ -388,8 +384,21 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if max_order:
         limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref, lot=lot),
                        "how": "%s / %s" % (money(max_order, p), _px(ref, p))})
-    limits.append({"name": "cash", "usd": available, "per": ref, "shares": shares_for(available, ref, lot=lot),
-                   "how": "%s = %s / %s" % (cash_note, money(available, p), _px(ref, p))})
+    cash_per = d_entry * (Decimal("1") + d_buy) if buy_fee_pct > 0 else d_entry
+    cash_shares = shares_for(available, cash_per, lot=lot)
+    if cash_shares > 0 and buy_fee_pct > 0:
+        step = Decimal("1") if p.get("currency") == "IDR" else Decimal("0.01")
+        d_avail = market._to_decimal(available)
+        while cash_shares > 0:
+            val = d_entry * cash_shares
+            fee = (val * d_buy).quantize(step, rounding=ROUND_HALF_UP)
+            if val + fee <= d_avail:
+                break
+            cash_shares -= lot
+    cash_how = "%s = %s / %s%s" % (cash_note, money(available, p), _px(ref, p),
+                                   " incl. buy fee" if buy_fee_pct > 0 else "")
+    limits.append({"name": "cash", "usd": available, "per": float(cash_per),
+                   "shares": cash_shares, "how": cash_how})
 
     qty = max(0, min(l["shares"] for l in limits))
     bound = [l["name"] for l in limits if l["shares"] == qty]
@@ -410,8 +419,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
                            % (lot, money(lot_risk, p), " incl. fees" if has_fees else "",
                               _px(ref, p), _px(stop, p), money(max_loss, p)))
             else:
+                lot_cost = money(cash_per * lot, p) + " incl. buy fee" if (bound[0] == "cash" and buy_fee_pct > 0) else money(ref * lot, p)
                 refusal = ("1 lot (%d shares) of %s costs %s, more than your %s limit (%s). No order."
-                           % (lot, sym, money(ref * lot, p), bound[0],
+                           % (lot, sym, lot_cost, bound[0],
                               limits[[l["name"] for l in limits].index(bound[0])]["how"]))
         elif bound[0] == "max loss":
             refusal = ("one share risks %s (entry %s minus stop %s), more than your %s max loss per trade. "

@@ -622,6 +622,27 @@ class IdxBudgetTest(unittest.TestCase):
             self.assertEqual(doc["orders"][0]["qty"], "300")
             self.assertEqual(doc["orders"][0]["market"], "idx")
 
+    def test_cash_limit_includes_buy_fee(self):
+        idx = market.load("idx")
+        now_u = check.parse_now("2026-11-23 10:15", p=idx)
+        cfg = {"market": "idx", "budget": 2965000, "cash_buffer_pct": 0, "max_position_pct": 100}
+        s = size.size_trade(self.plan, cfg, today="2026-11-23")
+        self.assertEqual((s["lots"], s["qty"], s["bound_by"]), (2, 200, "cash"))
+        res = check.check([size.bracket_order(s)], cfg, now=now_u)
+        self.assertEqual(res["results"][0]["verdict"], "PASS", res["results"][0]["reasons"])
+
+        # Overriding buy_fee_pct to 0 allows 3 lots and check PASSes
+        cfg_nofee = dict(cfg, buy_fee_pct=0)
+        s_nofee = size.size_trade(self.plan, cfg_nofee, today="2026-11-23")
+        self.assertEqual((s_nofee["lots"], s_nofee["qty"]), (3, 300))
+        self.assertEqual(check.check([size.bracket_order(s_nofee)], cfg_nofee, now=now_u)["results"][0]["verdict"], "PASS")
+
+        # Knife-edge ROUND_HALF_UP: 2 lots exact fee is 2962.50, rounded up to 2963 (needs 1977963)
+        cfg_edge = {"market": "idx", "budget": 1977962.5, "cash_buffer_pct": 0, "max_position_pct": 100}
+        s_edge = size.size_trade(self.plan, cfg_edge, today="2026-11-23")
+        self.assertEqual((s_edge["lots"], s_edge["qty"], s_edge["bound_by"]), (1, 100, "cash"))
+        self.assertEqual(check.check([size.bracket_order(s_edge)], cfg_edge, now=now_u)["results"][0]["verdict"], "PASS")
+
 
 class IdxRiskTest(unittest.TestCase):
     """Offline BBCA risk-check tests for IDX lots, ticks, ARA/ARB, windows, and short/margin."""
