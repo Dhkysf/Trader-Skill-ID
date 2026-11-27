@@ -1089,6 +1089,42 @@ class IdxPipelineMoneySafetyTest(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_pipeline_prev_close_and_arb_block_real_files(self):
+        exitp = load("trader-exit", "exit")
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                os.makedirs("trader", exist_ok=True)
+                with open("trader/config.json", "w", encoding="utf-8") as fh:
+                    json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}, fh)
+                self.assertEqual(self._run_mod(entry, [
+                    "check", "BBCA", "--offline", BBCA_5M, "--now", "2026-11-26 10:30", "--write",
+                ])[0], 0)
+                self.assertEqual(self._run_mod(exitp, [
+                    "plan", "--from", "trader/entry.json", "--now", "2026-11-26 10:30", "--write",
+                ])[0], 0)
+                with open("trader/plan.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["prev_close"], 5825.0)
+                self.assertEqual(self._run_mod(size, ["--now", "2026-11-26 10:30", "--write"])[0], 0)
+                with open("trader/orders.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["orders"][0]["plan"]["prev_close"], 5825.0)
+
+                # (d) stop under ARB (5425 for prev_close=5825 on 2026-11-26) is BLOCKed by check.py
+                self.assertEqual(self._run_mod(exitp, [
+                    "plan", "--from", "trader/entry.json", "--stop", "price:5400",
+                    "--now", "2026-11-26 10:30", "--write",
+                ])[0], 0)
+                self.assertEqual(self._run_mod(size, ["--now", "2026-11-26 10:30", "--write"])[0], 0)
+                code, out, _ = self._run_mod(check, ["--now", "2026-11-26 10:30"])
+                self.assertEqual(code, 1, out)
+                with open("trader/state/risk.json", encoding="utf-8") as fh:
+                    r0 = json.load(fh)["results"][0]
+                self.assertEqual(r0["verdict"], "BLOCK")
+                self.assertTrue(any(r.startswith("ar_band:") and "ARB" in r for r in r0["reasons"]), r0["reasons"])
+            finally:
+                os.chdir(cwd)
+
 
 if __name__ == "__main__":
     unittest.main()

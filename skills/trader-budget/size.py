@@ -441,8 +441,9 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     }
     out.update({"market": p["id"], "lot": lot, "lots": qty // lot,
                 "buy_fee_pct": buy_fee_pct, "sell_fee_pct": sell_fee_pct})
-    if plan.get("prev_close") is not None:
-        out["prev_close"] = _f(plan.get("prev_close"))
+    pc = _f(plan.get("prev_close"))
+    if pc is not None and pc > 0:
+        out["prev_close"] = pc
     return out
 
 

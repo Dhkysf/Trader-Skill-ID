@@ -658,6 +658,10 @@ def build_plan(a, now_utc):
             "risk_per_share": float(c["risk"]), "reward_risk": float(c["reward_risk"]), "flat_by": flat_by,
             "stop_detail": c["stop_detail"], "created_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": NOTE,
             "market": p["id"]}
+    if prev_close is not None:
+        pc = D(prev_close, "prev_close")
+        if pc > 0:
+            plan["prev_close"] = float(pc)
     if atr is not None:
         plan["atr"] = round(atr, 4)
         plan["atr_bars"] = atr_n
