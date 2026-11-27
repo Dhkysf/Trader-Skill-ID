@@ -205,7 +205,7 @@ def parse_time(value):
     return d.astimezone(_dt.timezone.utc)
 
 
-def parse_rss(data, ticker=None, source="Yahoo Finance"):
+def parse_rss(data, ticker=None, source="RSS"):
     """RSS XML -> items."""
     try:
         root = ET.fromstring(data)

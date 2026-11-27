@@ -894,11 +894,6 @@ def cmd_daily(a):
     return 0 if hits else 1
 
 
-def _n(x):
-    x = float(x)
-    return str(int(x)) if x == int(x) else "%.2f" % x
-
-
 def cmd_orb(a):
     t0 = time.time()
     cfg = read_config(a.config)
@@ -988,7 +983,7 @@ def cmd_orb(a):
                  else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
         for h in hits[:a.show]:
             print("  %8s  %-6s %10s  range %s to %s  %+.2f%% over" % (
-                h["at"], h["symbol"], _fmt_price(h["price"], p), _p(h["or_low"]), _p(h["or_high"]), h["pct_over"]))
+                h["at"], h["symbol"], _fmt_price(h["price"], p), _fmt_price(h["or_low"], p), _fmt_price(h["or_high"], p), h["pct_over"]))
         if len(hits) > a.show:
             print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     else:
@@ -1001,10 +996,6 @@ def cmd_orb(a):
         print(cal_note)
     print(NOTE + " Next: pick one chart, then /trader-news TICKER and /trader-entry TICKER.")
     return 0 if hits else 1
-
-
-def _p(x):
-    return "{:,.2f}".format(x)
 
 
 def main(argv=None):

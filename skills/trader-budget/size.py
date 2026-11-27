@@ -206,7 +206,7 @@ def parse_weights(data, p=None):
 
 
 def weights_from_arg(text, p=None):
-    """AAPL=22.04,AXP=17.14 -> {ticker: weight}"""
+    """BBCA=40,BBRI=30 -> {ticker: weight}"""
     prof = p or _IDX
     out = {}
     for part in text.split(","):
@@ -807,7 +807,7 @@ def report(result, orders, source=""):
                     money(r["investable"], prof), _num(r["max_position_pct"]), money(r["cap"], prof)))
     lines.append("")
     has_price = any("price" in pos for pos in r["positions"])
-    head = "%-7s %-22s %8s %11s" % ("ticker", "name", "weight", "dollars")
+    head = "%-7s %-22s %8s %11s" % ("ticker", "name", "weight", "amount")
     if has_price:
         head += " %10s %10s" % ("price", "shares")
     lines.append(head + "  note")
@@ -886,7 +886,7 @@ def run_plan(a, cfg, cfg_notices=()):
         else:
             limit = _f(a.limit)
             if limit is None or limit <= 0:
-                raise SizeError("--limit wants a price, like --limit 364.00")
+                raise SizeError("--limit wants a price, like --limit 9875")
     sym = market.base_symbol(p, (plan or {}).get("symbol"))
     notes, price = list(cfg_notices), None
     ppath = a.prices or ("trader/prices.json" if os.path.exists("trader/prices.json") else None)
@@ -973,7 +973,7 @@ def main(argv=None):
     g.add_argument("--targets", help="a weights file: {\"weights\": [{\"ticker\", \"weight\"}]}")
     g.add_argument("--top", type=int, help="keep only the N biggest weights")
     g.add_argument("--whole-shares", action="store_true", help="whole shares only (needs --prices)")
-    g.add_argument("--cents", action="store_true", help="size to the cent instead of whole dollars")
+    g.add_argument("--cents", action="store_true", help="keep fractional currency amounts instead of rounding to whole units")
     a = ap.parse_args(argv)
     try:
         raw_cfg = read_json(a.config, "config") if (a.config and os.path.exists(a.config)) else {}

@@ -179,12 +179,6 @@ def trading_day(d, p=None):
     return False, ("%s holiday: %s" % (_exchange(prof), name)) if name else "weekend"
 
 
-def session(d, p=None):
-    """(open_time, close_time) in market local time, or None if closed all day."""
-    s = market.sessions(p or _IDX, d)
-    return s[0] if s else None
-
-
 def next_open(d, p=None):
     prof = p or _IDX
     nd = d + datetime.timedelta(days=1)
@@ -548,7 +542,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
                           "volume": trig["v"], "volume_x": r2(vx), "pct_over": r2(100.0 * (trig["c"] / lvl - 1))}
         res["minutes_since"] = int((local - trig["end"]).total_seconds() // 60)
         if dt and utc_of(dt) < market.local_to_utc(prof, trig["end"]):
-            res["data_note"] = ("Yahoo's last trade is %s, before this bar closed: its close can still move a cent or two"
+            res["data_note"] = ("Yahoo's last trade is %s, before this bar closed: its close can still move a tick or two"
                                 % market.to_local(prof, utc_of(dt)).strftime("%H:%M:%S"))
         return res
     for bs, be in breaks:

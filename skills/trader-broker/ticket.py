@@ -151,7 +151,7 @@ def is_bracket(order):
 
 
 def max_loss(order, p=None, cfg=None, rv=None):
-    """(dollars, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
+    """(amount, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
     out_dec = max(2, market.price_decimals(p))
     stop = _f(order.get("stop_loss_stop_price")) or _f((order.get("plan") or {}).get("stop"))
     if rv and _f(rv.get("max_loss")) is not None:
@@ -522,7 +522,7 @@ def cmd_approve(a):
            "paper": bool(cfg.get("paper", True)), "broker": "manual"}
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
-    print("Recorded your yes for order %d: %s." % (a.index, plain_s))
+    print("Recorded your yes for order %d: %s" % (a.index, plain_s))
     print("Enter this order in your broker app yourself, then record the outcome: "
           "ticket.py result --index %d --status placed|denied|failed" % a.index)
     return 0
@@ -687,7 +687,7 @@ def main(argv=None):
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--reply")
-    p = sub.add_parser("result", help="record what happened after the Allow once / Deny card")
+    p = sub.add_parser("result", help="record the outcome after entering the order in your broker app")
     common(p)
     p.add_argument("--index", type=int, required=True)
     p.add_argument("--status", required=True, choices=["placed", "denied", "failed"])

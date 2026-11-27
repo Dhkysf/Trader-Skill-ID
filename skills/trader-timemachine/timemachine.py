@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Time Machine for trader-timemachine. Standard library only.
 
-Replays a planned day trade before you risk a dollar: 10,000 simulated runs of
+Replays a planned day trade before you risk any money: 10,000 simulated runs of
 the rest of the session from your entry, plus the same rule on every past
 session in the data.
 
@@ -646,8 +646,7 @@ def load_plan(a, now_utc, p=None):
                "entry": a.entry, "stop": a.stop, "target": a.target, "entry_time": a.entry_time,
                "setup": a.setup, "opening_range": {"minutes": a.or_minutes}, "stop_rule": a.stop_rule,
                "interval": "5m"}
-        if prof.get("id") != "us":
-            raw["market"] = prof["id"]
+        raw["market"] = prof["id"]
         if getattr(a, "prev_close", None) is not None:
             raw["prev_close"] = a.prev_close
         src = "flags"
@@ -1182,7 +1181,7 @@ def main(argv=None):
         p.add_argument("--replays", type=int, default=10000)
         p.add_argument("--seed", type=int, default=19)
         p.add_argument("--window", type=int, default=2, help="draw from the same time of day +- this many bars")
-        p.add_argument("--until", help="end each replay at this time (default 16:00, the close)")
+        p.add_argument("--until", help="end each replay at this time (default: market close)")
         p.add_argument("--offline", metavar="FILE", help="a saved Yahoo chart JSON (.json or .json.gz), no network")
         p.add_argument("--now", help='pretend it is this time ("2026-11-23 09:35" WIB, or ISO with Z)')
         p.add_argument("--config", default="trader/config.json", help="config file (default trader/config.json)")

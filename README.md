@@ -8,7 +8,7 @@ public data: Yahoo Finance charts and Indonesian RSS news feeds.
 One scans thousands of charts for setups. Another tracks breaking news on
 every stock you watch. One watches a setup bar by bar and tells you the moment
 to get in, and another sets your stop and your target before you do. And the
-craziest one is the Time Machine: before you risk a dollar, it replays the
+craziest one is the Time Machine: before you risk any money, it replays the
 rest of the session 10,000 times from the stock's own recent bars, plus every
 past day the same setup fired, and tells you the honest odds.
 

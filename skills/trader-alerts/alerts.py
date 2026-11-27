@@ -741,7 +741,7 @@ def main(argv=None):
     p.add_argument("--config", default="trader/config.json", help="flat_by when the plan has none")
     p.add_argument("--label", help="what a time alert says, e.g. \"flat by close\"")
     p.add_argument("--before-close", action="store_true",
-                   help="a time alert that moves 3 hours earlier on a 1:00 p.m. early close")
+                   help="a time alert that shifts earlier on an early-close session")
     p.add_argument("--date", help="watch this rule on this IDX date only (YYYY-MM-DD)")
     p.add_argument("--direction", choices=["up", "down"])
     p.add_argument("--rearm", action="store_true")

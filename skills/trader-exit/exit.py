@@ -150,12 +150,6 @@ def ampm(t):
     return "%d:%02d %s" % (h, t.minute, "AM" if t.hour < 12 else "PM")
 
 
-def session(d, p=None):
-    """(open_time, close_time) in market local time, or None if closed all day."""
-    s = market.sessions(p or _IDX, d)
-    return s[0] if s else None
-
-
 # ---------------------------------------------------------------- money math (Decimal)
 
 def D(x, what="a number"):
