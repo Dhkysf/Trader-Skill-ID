@@ -140,8 +140,8 @@ def _tz_label(p):
     return prof.get("tz_label") or prof.get("timezone") or "WIB"
 
 
-def _px(x, p=None):
-    return market.price(p or _IDX, x)
+def _px(x, p=None, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
 
 
 def window_check(now_local, c):
@@ -190,7 +190,9 @@ def window_check(now_local, c):
     if before is not None and t < before:
         return ["window: no new entries before %s %s (it is %s)" % (before.strftime("%H:%M"), tz,
                                                                    t.strftime("%H:%M"))], warns
-    if after is not None and t > after:
+    active = market.active_session_window(p, now_local)
+    overnight = active is not None and active[0].date() < active[1].date()
+    if after is not None and ((after < t < active[1].time()) if overnight else (t > after)):
         return ["window: no new entries after %s %s (it is %s)" % (after.strftime("%H:%M"), tz,
                                                                   t.strftime("%H:%M"))], warns
     return [], warns
@@ -220,8 +222,8 @@ def _f(x):
         return None
 
 
-def money(x, p=None):
-    return market.money(p or _IDX, x)
+def money(x, p=None, currency=None):
+    return market.money(p or _IDX, x, currency=currency)
 
 
 def account(cfg, portfolio, prices, p=None):
@@ -235,14 +237,18 @@ def account(cfg, portfolio, prices, p=None):
         if not budget:
             raise RiskError("no trader/portfolio.json and no budget in the config: "
                             "nothing to check the orders against")
-        return {"cash": budget, "shares": {}, "values": {}}, warnings
+        return {"cash": budget, "shares": {}, "values": {}, "fx_positions": []}, warnings
     cash = _f(portfolio.get("cash"))
     if cash is None:
         raise RiskError("portfolio.json needs a \"cash\" number")
-    shares, values = {}, {}
+    shares, values, fx_positions = {}, {}, []
     for pos in portfolio.get("positions", []):
         t = market.base_symbol(prof, pos.get("ticker") or pos.get("symbol"))
         if not t:
+            continue
+        if market.is_fx(prof) and pos.get("lots") is not None:
+            fx_positions.append({"symbol": t, "side": str(pos.get("side") or "buy").lower(),
+                                 "lots": float(pos["lots"]), "entry": _f(pos.get("entry")) or prices.get(t)})
             continue
         n = _f(pos.get("shares", pos.get("qty")))
         if n is None:
@@ -254,7 +260,7 @@ def account(cfg, portfolio, prices, p=None):
             basis = sum(_f(l.get("cost")) or 0 for l in pos.get("lots", []))
             values[t] = basis
             warnings.append("no price for %s: valued at its cost basis %s" % (t, money(basis, p)))
-    return {"cash": cash, "shares": shares, "values": values}, warnings
+    return {"cash": cash, "shares": shares, "values": values, "fx_positions": fx_positions}, warnings
 
 
 def rec_day(rec):
@@ -281,17 +287,19 @@ def placed_today(state, today):
 # ---------------------------------------------------------------- the check
 
 def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=None, price_times=None,
-          prev_closes=None):
+          prev_closes=None, usdidr=None):
     """Pure function. Returns {"results": [...], "pass": n, "block": n, "warnings": [...]}.
 
     now          naive UTC (default: the real clock); its local date is "today"
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     p = market.from_config(cfg)
+    is_fx = market.is_fx(p)
     disp = market.display_name(p)
     c, cfg_notices = market.merge_config(cfg, DEFAULTS, p=p)
-    dec = market.price_decimals(p)
+    acct_ccy = market.account_currency(p, c) if is_fx else (p.get("currency") or "IDR")
+    dec = 0 if (is_fx and acct_ccy == "IDR") else (2 if is_fx else market.price_decimals(p))
     out_dec = max(2, dec)
-    tol = float(market.price_tol(p))
+    tol = 0.5 if (is_fx and acct_ccy == "IDR") else (0.005 if is_fx else float(market.price_tol(p)))
     lot = int(p.get("lot", 1))
     buy_fee_pct, sell_fee_pct = market.fees(p, c)
     has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
@@ -320,7 +328,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     win_reasons, win_warns = window_check(now_et, c)
     seen = set()
     results = []
-    batch_entries, batch_loss = 0, 0.0
+    batch_entries, batch_loss, batch_notional = 0, 0.0, 0.0
     if not c.get("paper", True):
         top_warn.append("LIVE account (\"paper\": false): these orders use real money")
     top_warn.extend(cfg_notices)
@@ -380,7 +388,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         if bracket:
             if notional is not None:
                 reasons.append("format: a bracket order needs a whole-share qty, not a notional amount")
-            elif _f(qty) is not None and abs(_f(qty) - round(_f(qty))) > 1e-9:
+            elif not is_fx and _f(qty) is not None and abs(_f(qty) - round(_f(qty))) > 1e-9:
                 reasons.append("format: a bracket order takes whole shares only, got qty %r" % qty)
             if tif not in ("day", "gtc"):
                 reasons.append("format: a bracket order needs time_in_force day or gtc, got %r" % tif)
@@ -425,7 +433,14 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             warns.append("the %s price in trader/prices.json is older than %d minutes: not used"
                          % (sym, FRESH_MINUTES))
         q = _f(qty)
-        if lot > 1:
+        if is_fx:
+            min_lot = float(p.get("min_lot", 0.01))
+            lot_step = float(p.get("lot_step", 0.01))
+            if notional is not None:
+                reasons.append("lot: %s orders must use qty in lots, not notional" % disp)
+            elif q is not None and (q < min_lot - 1e-9 or abs(q / lot_step - round(q / lot_step)) > 1e-6):
+                reasons.append("lot: qty %s must be >= %.2f lot in %.2f steps" % (_num(q), min_lot, lot_step))
+        elif lot > 1:
             if notional is not None:
                 reasons.append("lot: %s orders must use qty in whole lots of %d shares, not notional" % (disp, lot))
             elif q is not None and (abs(q - round(q)) > 1e-9 or int(round(q)) % lot != 0):
@@ -458,7 +473,12 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         held = acct["shares"].get(sym, 0.0)
         held_value = acct["values"].get(sym, 0.0)
         exiting = False
-        if side == "sell" and held > 1e-9:
+        if is_fx:
+            opp = "sell" if side == "buy" else "buy"
+            open_fx = sum(fp["lots"] for fp in acct.get("fx_positions", []) if fp["symbol"] == sym and fp["side"] == opp)
+            if q is not None and open_fx > 1e-9:
+                exiting = q <= open_fx + 1e-9
+        elif side == "sell" and held > 1e-9:
             if q is not None:
                 exiting = q <= held + 1e-9
             elif value is not None:
@@ -466,7 +486,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         elif side == "buy" and held < -1e-9 and q is not None:
             exiting = q <= -held + 1e-9
         kind = "exit" if exiting else "entry"
-        if kind == "entry" and value is None and q:
+        if not is_fx and kind == "entry" and value is None and q:
             later.append("price: no price for %s to size a %s-share order; add it to "
                          "trader/prices.json (trader-alerts: alerts.py quote %s --write)" % (sym, qty, sym))
 
@@ -490,7 +510,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             step = Decimal("1") if p.get("currency") == "IDR" else Decimal("0.01")
             buy_fee = float((market._to_decimal(value) * market._to_decimal(buy_fee_pct) / Decimal("100"))
                             .quantize(step, rounding=ROUND_HALF_UP))
-        if value is not None and side == "buy" and kind == "entry":
+        if not is_fx and value is not None and side == "buy" and kind == "entry":
             cash_need = value + buy_fee
             after_cash = cash - cash_need
             if after_cash < -tol:
@@ -512,7 +532,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                 later.append("position: %s would be %s, %.1f%% of the %s account, over your %s%% cap"
                              % (sym, money(pos_after, p), 100.0 * pos_after / total, money(total, p),
                                 _pct(c["max_position_pct"])))
-        if side == "sell" and sym and kind == "entry":
+        if not is_fx and side == "sell" and sym and kind == "entry":
             if q is not None:
                 over = q > held + 1e-9
             elif value is not None:
@@ -531,7 +551,97 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
 
         # day-trade checks: stop, loss, reward:risk, daily loss, trades, window
         max_loss = risk_ps = rr = stop = target = None
-        if kind == "entry" and side in ("buy", "sell"):
+        order_notional = 0.0
+        if is_fx and kind == "entry" and side in ("buy", "sell"):
+            if side == "sell" and not market.allows_short(p, c):
+                reasons.append("short: short selling is off (\"allow_short\": false)")
+            max_lots = _f(c.get("max_lots"))
+            if max_lots and q is not None and q > max_lots + 1e-9:
+                later.append("lots: %.2f lot %s is above your max_lots %.2f" % (q, sym, max_lots))
+            leg_stop, plan_stop = _f(o.get("stop_loss_stop_price")), _f(plan.get("stop"))
+            stop = leg_stop if leg_stop else plan_stop
+            target = _f(o.get("take_profit_limit_price")) or _f(plan.get("target"))
+            if not stop:
+                if c.get("require_stop", True):
+                    later.append("stop: no stop. Every entry needs one (\"require_stop\": true)")
+                else:
+                    warns.append("no stop: the max loss is not capped, so it is not counted in the daily loss")
+            elif not ref and q is not None:
+                later.append("price: no price for %s to check risk and leverage" % sym)
+            elif ref and q is not None:
+                long = side == "buy"
+                d_ref = market._to_decimal(ref)
+                d_stop = market._to_decimal(stop)
+                d_ptol = market.price_tol(p, ref, symbol=sym)
+                if (long and d_stop >= d_ref - d_ptol) or (not long and d_stop <= d_ref + d_ptol):
+                    later.append("stop: the stop %s must be %s the entry %s for a %s"
+                                 % (_px(stop, p, sym), "below" if long else "above", _px(ref, p, sym), side))
+                else:
+                    eff_usdidr = usdidr or prices.get("USDIDR") or _f(plan.get("usdidr"))
+                    try:
+                        pip_val = market.pip_value(p, sym, ref, acct_ccy, eff_usdidr)
+                        notional_1 = market.notional_per_lot(p, sym, ref, acct_ccy, eff_usdidr)
+                    except ValueError as e:
+                        later.append("usdidr: %s" % e)
+                        pip_val = notional_1 = None
+                    if pip_val is not None:
+                        pip = market.pip_size(p, sym)
+                        spread = market.spread_pips(p, sym, c)
+                        d_risk = abs(d_ref - d_stop)
+                        risk_ps = float(d_risk)
+                        stop_pips = d_risk / pip
+                        loss_step = Decimal("1") if acct_ccy == "IDR" else Decimal("0.01")
+                        max_loss = float(((stop_pips + spread) * pip_val * market._to_decimal(q)).quantize(
+                            loss_step, rounding=ROUND_HALF_UP))
+                        order_notional = float((notional_1 * market._to_decimal(q)).quantize(
+                            loss_step, rounding=ROUND_HALF_UP))
+                        value = order_notional
+                        open_notional = batch_notional + order_notional
+                        for fp_pos in acct.get("fx_positions", []):
+                            if fp_pos.get("entry"):
+                                try:
+                                    pn = market.notional_per_lot(p, fp_pos["symbol"], fp_pos["entry"], acct_ccy, eff_usdidr)
+                                    open_notional += float(pn * market._to_decimal(fp_pos["lots"]))
+                                except ValueError:
+                                    pass
+                        equity = acct["cash"]
+                        eff_lev = (open_notional / equity) if equity > 0 else float("inf")
+                        if eff_lev > 1.0 + 1e-9 and not market.allows_margin(p, c):
+                            later.append("margin: effective leverage %.2fx requires allow_margin" % eff_lev)
+                        max_lev = _f(c.get("max_leverage")) or 10.0
+                        if eff_lev > max_lev + 1e-9:
+                            later.append("leverage: effective leverage %.2fx exceeds max_leverage %sx"
+                                         % (eff_lev, _num(max_lev)))
+                        cap = _f(c.get("max_loss_per_trade"))
+                        if cap and max_loss > cap + tol:
+                            later.append("loss: %.2f lot max loss incl. spread = %s, over your %s max loss per trade"
+                                         % (q, money(max_loss, p, acct_ccy), money(cap, p, acct_ccy)))
+                        min_rr = _f(c.get("min_reward_risk"))
+                        if target:
+                            d_target = market._to_decimal(target)
+                            if (long and d_target <= d_ref + d_ptol) or (not long and d_target >= d_ref - d_ptol):
+                                later.append("target: the target %s must be %s the entry %s"
+                                             % (_px(target, p, sym), "above" if long else "below", _px(ref, p, sym)))
+                            else:
+                                rr = round(float(abs(d_target - d_ref) / d_risk), 2)
+                                if min_rr and rr < min_rr - 1e-9:
+                                    later.append("reward:risk: %.2f is under your minimum %s" % (rr, _num(min_rr)))
+                        elif min_rr:
+                            later.append("reward:risk: no target to measure it against (min_reward_risk %s)"
+                                         % _num(min_rr))
+            daily = _f(c.get("max_daily_loss"))
+            if daily and max_loss is not None:
+                used = loss_today + batch_loss
+                if used + max_loss > daily + tol:
+                    later.append("daily loss: %s already at risk today plus %s = %s, over your %s daily loss limit"
+                                 % (money(used, p, acct_ccy), money(max_loss, p, acct_ccy),
+                                    money(used + max_loss, p, acct_ccy), money(daily, p, acct_ccy)))
+            cap_t = int(c.get("max_trades_per_day") or 0)
+            if cap_t and len(entries_today) + batch_entries >= cap_t:
+                later.append("trades: %d entries placed today plus %d passed earlier in this batch, your limit is %d a day"
+                             % (len(entries_today), batch_entries, cap_t))
+            later.extend(win_reasons)
+        elif kind == "entry" and side in ("buy", "sell"):
             long = side == "buy"
             leg_stop, plan_stop = _f(o.get("stop_loss_stop_price")), _f(plan.get("stop"))
             stop = leg_stop if leg_stop else plan_stop
@@ -669,7 +779,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             if kind == "entry" and side in ("buy", "sell"):
                 batch_entries += 1
                 batch_loss += max_loss or 0.0
-            if side == "buy":
+                batch_notional += order_notional
+            if not is_fx and side == "buy":
                 if value is not None:
                     acct["cash"] -= value + buy_fee
                     acct["values"][sym] = acct["values"].get(sym, 0.0) + value
@@ -677,7 +788,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     acct["shares"][sym] = held + q
                 elif ref and value is not None:
                     acct["shares"][sym] = held + value / ref
-            elif side == "sell":
+            elif not is_fx and side == "sell":
                 if value is not None:
                     sell_fee = 0.0
                     if sell_fee_pct > 0:
@@ -692,7 +803,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     acct["shares"][sym] = held - value / ref
         results.append({
             "index": i, "symbol": sym, "side": side, "kind": kind,
-            "amount": money(_f(notional) or 0, p) if notional is not None else ("%s shares" % qty),
+            "amount": money(_f(notional) or 0, p) if notional is not None else ("%s %s" % (qty, "lots" if is_fx else "shares")),
             "value_usd": round(value, out_dec) if value is not None else None,
             "entry_ref": round(ref, out_dec) if ref else None, "entry_ref_from": ref_from,
             "stop": stop, "target": target, "risk_per_share": risk_ps, "max_loss": max_loss,
@@ -714,6 +825,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         "today": today_doc,
         "market": p["id"],
     }
+    if is_fx:
+        out_doc["account_currency"] = acct_ccy
     return out_doc
 
 
@@ -746,7 +859,8 @@ def report(res):
             lines.append("        ~ " + x)
     lines.append("")
     lines.append("%d passed, %d blocked at %s %s. Cash after the passed orders: %s (%s account)."
-                 % (res["pass"], res["block"], res["now_local"], tz, money(res["cash_after"], p),
+                 % (res["pass"], res["block"], res["now_local"], tz,
+                    money(res["cash_after"], p, currency=res.get("account_currency")),
                     "paper" if res["paper"] else "LIVE"))
     if res["block"]:
         lines.append("Blocked orders do not go to the broker. Fix the order or your rules, then check again.")
@@ -800,6 +914,7 @@ def main(argv=None):
     ap.add_argument("--portfolio", default="trader/portfolio.json",
                     help="your account; if missing, a fresh account funded with the budget")
     ap.add_argument("--prices", default="trader/prices.json")
+    ap.add_argument("--usdidr", type=float, help="USDIDR rate for forex IDR accounts")
     ap.add_argument("--state", default="trader/state/broker.json", help="what trader-broker placed today")
     ap.add_argument("--now", help="pretend it is this WIB time, e.g. \"2026-11-23 09:35\"")
     ap.add_argument("--today", help="YYYY-MM-DD (default: today in WIB)")
@@ -822,7 +937,8 @@ def main(argv=None):
         prices, times = load_prices(pdoc, p=p)
         prev_closes = load_prev_closes(pdoc, p=p)
         state = read_json(a.state, "broker state", required=False)
-        res = check(orders, cfg, portfolio, prices, state, a.today, now, times, prev_closes=prev_closes)
+        res = check(orders, cfg, portfolio, prices, state, a.today, now, times, prev_closes=prev_closes,
+                    usdidr=a.usdidr)
         if pdoc.get("as_of"):
             res["prices_as_of"] = pdoc["as_of"]
         if not a.no_write:
