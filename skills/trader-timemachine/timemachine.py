@@ -909,8 +909,12 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
         try:
             lo_d, hi_d = market.ar_limits(prof, ref_close, plan["date"])
         except ValueError as e:
-            raise TMError(str(e))
-        ar_band = (float(lo_d), float(hi_d))
+            if "no auto_rejection rule" in str(e):
+                warn.append("no ARA/ARB rule for %s in markets/%s.json; band not checked" % (plan["date"], prof["id"]))
+            else:
+                raise TMError(str(e))
+        else:
+            ar_band = (float(lo_d), float(hi_d))
     mc = simulate(pool, plan["entry"], plan["stop"], plan["target"], k, last, replays, seed, window,
                   plan["side"], slot_info=sm, ar_band=ar_band)
     mc = dict(mc, until=clock24(until_min), pool_sessions=len(sessions), pool_from=sessions[0][0],

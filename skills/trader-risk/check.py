@@ -589,19 +589,26 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             if p.get("auto_rejection"):
                 pc = _f(o.get("prev_close")) or _f(plan.get("prev_close")) or _f((prev_closes or {}).get(sym))
                 if pc and pc > 0:
-                    arb, ara = market.ar_limits(p, pc, day=today)
-                    arb_f, ara_f = float(arb), float(ara)
-                    for label, v in (("entry", ref), ("stop", stop), ("target", target)):
-                        if v is None:
-                            continue
-                        if v < arb_f - 1e-9:
-                            later.append("ar_band: %s %s is below today's ARB %s (ref %s; band %s to %s)"
-                                         % (label, money(v, p), money(arb_f, p), money(pc, p),
-                                            money(arb_f, p), money(ara_f, p)))
-                        elif v > ara_f + 1e-9:
-                            later.append("ar_band: %s %s is above today's ARA %s (ref %s; band %s to %s)"
-                                         % (label, money(v, p), money(ara_f, p), money(pc, p),
-                                            money(arb_f, p), money(ara_f, p)))
+                    try:
+                        arb, ara = market.ar_limits(p, pc, day=today)
+                    except ValueError as e:
+                        if "no auto_rejection rule" in str(e):
+                            warns.append("no ARA/ARB rule for %s in markets/%s.json; band not checked" % (today, p["id"]))
+                        else:
+                            raise
+                    else:
+                        arb_f, ara_f = float(arb), float(ara)
+                        for label, v in (("entry", ref), ("stop", stop), ("target", target)):
+                            if v is None:
+                                continue
+                            if v < arb_f - 1e-9:
+                                later.append("ar_band: %s %s is below today's ARB %s (ref %s; band %s to %s)"
+                                             % (label, money(v, p), money(arb_f, p), money(pc, p),
+                                                money(arb_f, p), money(ara_f, p)))
+                            elif v > ara_f + 1e-9:
+                                later.append("ar_band: %s %s is above today's ARA %s (ref %s; band %s to %s)"
+                                             % (label, money(v, p), money(ara_f, p), money(pc, p),
+                                                money(arb_f, p), money(ara_f, p)))
                 else:
                     warns.append("no prev_close for %s: could not check today's ARA/ARB band" % sym)
             daily = _f(c.get("max_daily_loss"))

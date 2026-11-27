@@ -721,6 +721,42 @@ class IdxRiskTest(unittest.TestCase):
         res_off = check.check([self.order], dict(self.cfg, no_entries_before_break_min=0), now=self._at("2026-11-23 11:55"))
         self.assertEqual(res_off["results"][0]["verdict"], "PASS", res_off["results"][0]["reasons"])
 
+    def test_missing_ar_rule_warns_without_crash(self):
+        want = "no ARA/ARB rule for 2026-10-19 in markets/idx.json; band not checked"
+        out = io.StringIO()
+        with redirect_stdout(out):
+            rc = exitp.main([
+                "plan", "--symbol", "BBCA", "--entry", "9900", "--stop", "price:9700",
+                "--target", "1R", "--prev-close", "9800", "--date", "2026-10-19",
+            ])
+        self.assertEqual(rc, 0)
+        self.assertIn(want, out.getvalue())
+
+        res = check.check([self.order], self.cfg, now=self._at("2026-10-19 10:15"))
+        r0 = res["results"][0]
+        self.assertEqual(r0["verdict"], "PASS", r0["reasons"])
+        self.assertIn(want, r0["warnings"])
+        self.assertNotIn(want, r0["info"])
+        self.assertNotIn(want, r0["reasons"])
+
+        import copy
+        no_ar_prof = copy.deepcopy(self.idx)
+        no_ar_prof["auto_rejection"][0]["effective_from"] = "2026-12-01"
+        plan = tm.normalize_plan({
+            "symbol": "BBCA", "side": "buy", "date": "2026-11-26", "setup": "orb",
+            "entry": 5875.0, "entry_time": "09:25 AM", "interval": "5m",
+            "opening_range": {"high": 5850.0, "low": 5800.0, "minutes": 15},
+            "stop": 5825.0, "stop_rule": "or_mid", "target": 5975.0, "target_r": 2.0,
+            "prev_close": 5825.0, "market": "idx",
+        }, p=no_ar_prof)
+        with open(BBCA_5M, "rb") as fh:
+            import gzip
+            bbca_text = gzip.decompress(fh.read()).decode("utf-8")
+        doc = tm.time_machine(bbca_text, plan, tm.parse_now("2026-11-26 16:00", p=no_ar_prof),
+                              replays=50, seed=19, p=no_ar_prof)
+        self.assertNotIn("ar_band", doc["mc"])
+        self.assertIn("no ARA/ARB rule for 2026-11-26 in markets/idx.json; band not checked", doc["warnings"])
+
     def test_short_margin_and_fee_inclusive_loss_blocks(self):
         short_ord = dict(self.order, side="sell")
         res_sh = check.check([short_ord], dict(self.cfg, allow_short=True), now=self._at("2026-11-23 10:15"))

@@ -314,7 +314,13 @@ def ar_warnings(p, stop, target, prev_close, day):
     pc = D(prev_close, "prev_close")
     if pc <= 0:
         return []
-    arb, ara = market.ar_limits(p, pc, day=day)
+    try:
+        arb, ara = market.ar_limits(p, pc, day=day)
+    except ValueError as e:
+        if "no auto_rejection rule" in str(e):
+            day_s = day.isoformat() if hasattr(day, "isoformat") else str(day)
+            return ["no ARA/ARB rule for %s in markets/%s.json; band not checked" % (day_s, p["id"])]
+        raise
     out = []
     if D(stop) < arb:
         out.append("ARB lock: a stop there may not fill (stop %s is below today's ARB %s from previous close %s)."
