@@ -81,6 +81,7 @@ MAX_CONFIRM = 200   # stage-2 v8 charts per orb scan, most traded first
 MIN_DAILY_BARS = 30
 DEFAULT_UNIVERSE = "trader/universe.txt"
 NOTE = "A scan is a list of charts that match a rule, not a list of stocks to buy."
+FX_NOTE = "A scan is a list of charts that match a rule, not a list of trades to take."
 
 _IDX = market.load("idx")
 
@@ -896,7 +897,8 @@ def cmd_daily(a):
     if min_value > 0:
         liq_desc = "%s+ and %s+ traded value" % (_fmt_price(min_price, p), _fmt_price(min_value, p))
     else:
-        liq_desc = "%s+ and %s+ shares" % (_fmt_price(min_price, p), "{:,}".format(min_volume))
+        liq_desc = "%s+ and %s+ %s" % (_fmt_price(min_price, p), "{:,}".format(min_volume),
+                                      "volume" if market.is_fx(p) else "shares")
     print("Fetched %s of %s charts%s. %s passed the liquidity filter (%s)%s; "
           "%s scanned." % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
                            (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
@@ -921,7 +923,7 @@ def cmd_daily(a):
         print(delay)
     if cal_note:
         print(cal_note)
-    print(NOTE + " Next: pick one chart, then /trader-news TICKER.")
+    print((FX_NOTE if market.is_fx(p) else NOTE) + " Next: pick one chart, then /trader-news TICKER.")
     return 0 if hits else 1
 
 
@@ -1059,7 +1061,7 @@ def cmd_orb(a):
         print(delay)
     if cal_note:
         print(cal_note)
-    print(NOTE + " Next: pick one chart, then /trader-news TICKER and /trader-entry TICKER.")
+    print((FX_NOTE if market.is_fx(p) else NOTE) + " Next: pick one chart, then /trader-news TICKER and /trader-entry TICKER.")
     return 0 if hits else 1
 
 

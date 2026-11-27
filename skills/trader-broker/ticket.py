@@ -655,7 +655,8 @@ def cmd_result(a):
         print("When it fills, record it: ticket.py fill --symbol %s --side %s --qty Q --price P"
               % (sym, rec["side"]))
         if rec.get("kind") == "entry" and is_bracket(order):
-            print("When the stop-loss or the take-profit fills later, record that sell the same way.")
+            close_side = "buy" if rec.get("side") == "sell" else "sell"
+            print("When the stop-loss or the take-profit fills later, record that %s the same way." % close_side)
     return 0
 
 
@@ -687,19 +688,23 @@ def cmd_flatten(a):
     p = market.from_config(cfg)
     sym = market.base_symbol(p, a.symbol)
     now, today = _clock(a, p=p)
-    source = "your broker app"
+    is_fx = market.is_fx(p)
+    source = "your broker platform" if is_fx else "your broker app"
     if a.qty is not None:
         qty = _f(a.qty)
         if qty is None or qty <= 0:
-            raise TicketError("--qty wants the number of shares you hold, like --qty 300")
+            raise TicketError("--qty wants the %s you hold, like --qty %s"
+                              % ("lots" if is_fx else "number of shares", "0.10" if is_fx else "300"))
     else:
         pf = read_json(a.portfolio, "portfolio", required=False) or {}
         qty = sum(_f(pos.get("shares", pos.get("qty"))) or 0 for pos in pf.get("positions", [])
                   if market.base_symbol(p, pos.get("ticker") or pos.get("symbol")) == sym)
         source = a.portfolio
         if qty <= 1e-9:
-            raise TicketError("nothing to flatten: no %s shares in %s. Check your broker app "
-                              "and pass --qty if you do hold some" % (sym, a.portfolio))
+            raise TicketError("nothing to flatten: no %s %s in %s. Check your %s "
+                              "and pass --qty if you do hold some"
+                              % (sym, "position" if is_fx else "shares", a.portfolio,
+                                 "broker platform" if is_fx else "broker app"))
     plan = read_json(a.plan, "plan", required=False) or {}
     tz = p.get("tz_label") or p.get("timezone") or "WIB"
     default_flat = (p.get("defaults") or {}).get("flat_by") or "15:45"

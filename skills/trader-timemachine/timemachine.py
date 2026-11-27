@@ -1052,11 +1052,12 @@ def report(doc):
     until = clock12(int(m["until"][:2]) * 60 + int(m["until"][3:]))
     wd = WEEKDAYS[datetime.date.fromisoformat(p["date"]).weekday()]
     r = p["target_r"]
+    unit_w = "per unit" if market.is_fx(prof) else "a share"
     lines = [
-        "%s %s, %s %s: entry %s at %s (bar %d), stop %s, target %s (%sR, risk %s a share)."
+        "%s %s, %s %s: entry %s at %s (bar %d), stop %s, target %s (%sR, risk %s %s)."
         % (p["symbol"], p["side"], wd, p["date"], _px(p["entry"], prof, p["symbol"]), p["entry_time"], p["entry_bar"],
            _px(p["stop"], prof, p["symbol"]), _px(p["target"], prof, p["symbol"]), ("%g" % r),
-           _px(p["risk_per_share"], prof, p["symbol"])),
+           _px(p["risk_per_share"], prof, p["symbol"]), unit_w),
         "%s replays of the rest of the session, %s to %s (%d five-minute bars), seed %d."
         % ("{:,}".format(m["replays"]), p["entry_time"], until, m["bars_left"], m["seed"]),
         "Each bar is drawn whole from %s's own 5-min bars at the same time of day (+-%d bars) over its last "

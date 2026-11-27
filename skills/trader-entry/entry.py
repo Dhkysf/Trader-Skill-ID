@@ -642,7 +642,8 @@ def setup_name(res, p=None):
     if res["setup"] == "orb":
         return "opening-range breakout (%d-minute range)" % res["or_minutes"]
     sym = res.get("symbol")
-    return "close above %s" % _px(res["level"], p, symbol=sym) if res["level"] is not None else "close above a level"
+    dir_w = "below" if res.get("side") == "sell" else "above"
+    return "close %s %s" % (dir_w, _px(res["level"], p, symbol=sym)) if res["level"] is not None else "close %s a level" % dir_w
 
 
 def describe(res):
@@ -687,8 +688,9 @@ def describe(res):
             out.append("Nothing was placed.")
         else:
             out.append("This is the moment to get in, if you take the trade. Nothing was placed.")
-        out.append("Next: set the stop and target BEFORE you buy: /trader-exit "
-                   "(exit.py plan --from trader/entry.json).")
+        act_w = "enter" if (market.is_fx(p) or res.get("side") == "sell") else "buy"
+        out.append("Next: set the stop and target BEFORE you %s: /trader-exit "
+                   "(exit.py plan --from trader/entry.json)." % act_w)
     else:
         out.append("%s  %s." % (label, res["reason"]))
         f = res.get("forming")
@@ -726,12 +728,13 @@ def bar_line(b, res):
             note = "opening range set: high %s, low %s" % (_px(orr["high"], p, symbol=res["symbol"]), _px(orr["low"], p, symbol=res["symbol"]))
     elif t and t["bar_index"] == b["slot"]:
         delay_note = ("; data about %d min late" % delay_min) if delay_min > 0 else ""
-        note = "TRIGGERED: closed above %s (%+.2f%%%s). Get in now if you take it: %s, %s" % (
-            _px(lvl, p, symbol=res["symbol"]), t["pct_over"], delay_note, t["time"], _px(t["price"], p, symbol=res["symbol"]))
+        dir_w = "below" if res.get("side") == "sell" else "above"
+        note = "TRIGGERED: closed %s %s (%+.2f%%%s). Get in now if you take it: %s, %s" % (
+            dir_w, _px(lvl, p, symbol=res["symbol"]), t["pct_over"], delay_note, t["time"], _px(t["price"], p, symbol=res["symbol"]))
     elif lvl is None:
         note = ""
-    elif b["c"] > lvl:
-        note = "above %s" % _px(lvl, p, symbol=res["symbol"])
+    elif (b["c"] < lvl) if res.get("side") == "sell" else (b["c"] > lvl):
+        note = "%s %s" % ("below" if res.get("side") == "sell" else "above", _px(lvl, p, symbol=res["symbol"]))
         if res["setup"] == "level" or b["slot"] >= n_or:
             avg = orr.get("avg_volume")
             if res.get("min_volume_x") and avg:
@@ -739,7 +742,9 @@ def bar_line(b, res):
             elif res.get("no_entries_before") and b["end"] < datetime.datetime.combine(b["et"].date(), parse_hhmm(res["no_entries_before"], "x", p=p)):
                 note += ", but no entries before %s" % res["no_entries_before"]
     else:
-        note = "%s under %s" % (_px(lvl - b["c"], p, symbol=res["symbol"]), _px(lvl, p, symbol=res["symbol"]))
+        is_short = res.get("side") == "sell"
+        diff = (b["c"] - lvl) if is_short else (lvl - b["c"])
+        note = "%s %s %s" % (_px(diff, p, symbol=res["symbol"]), "above" if is_short else "under", _px(lvl, p, symbol=res["symbol"]))
     return "%5s bar  closed %s  %s" % (start, _px(b["c"], p, symbol=res["symbol"]), note)
 
 

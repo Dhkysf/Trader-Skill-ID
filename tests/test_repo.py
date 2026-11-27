@@ -41,8 +41,8 @@ class Repo(unittest.TestCase):
 
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in IGNORED_ROOT)
-        self.assertEqual(root, sorted([".antigravity-plugin", "AGENTS.md", "LICENSE", "README.md",
-                                       "check.bat", "skills", "tests"]))
+        self.assertEqual(root, sorted([".antigravity-plugin", "AGENTS.md", "CHANGELOG.md", "LICENSE",
+                                       "README.en.md", "README.md", "check.bat", "skills", "tests"]))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -74,19 +74,37 @@ class Repo(unittest.TestCase):
 
     def test_readme_carries_the_reel_copy(self):
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as fh:
-            readme = " ".join(fh.read().split())
-        self.assertTrue(readme.startswith("# Trader Skill ID"))
-        for line in ("Agent skills for day-trading analysis in Google Antigravity: Indonesian stocks (IDX) today, forex next.",
-                     "## Install",
+            readme_id = " ".join(fh.read().split())
+        self.assertTrue(readme_id.startswith("# Trader Skill ID English: [README.en.md](README.en.md)"))
+        for line in (".agents\\skills",
+                     "agy plugin install https://github.com/Dhkysf/Trader-Skill-ID",
+                     "## Data dan keterlambatan",
+                     "## Aturan berubah",
+                     "## Ketentuan penting",
+                     "Bukan saran investasi",
+                     "Bappebti",
+                     "## Kredit",
+                     "3d0f4ef"):
+            self.assertIn(line, readme_id)
+        for s in SKILLS:
+            self.assertIn("/" + s, readme_id, s)
+
+        with open(os.path.join(ROOT, "README.en.md"), encoding="utf-8") as fh:
+            readme_en = " ".join(fh.read().split())
+        self.assertTrue(readme_en.startswith("# Trader Skill ID Bahasa Indonesia: [README.md](README.md)"))
+        for line in ("## Install (Google Antigravity)",
                      ".agents\\skills",
                      "agy plugin install https://github.com/Dhkysf/Trader-Skill-ID",
-                     "## Ringkasan (Bahasa Indonesia)",
+                     "## Data and delay",
+                     "## Changing rules",
+                     "## Fine print",
+                     "Not financial advice.",
+                     "Bappebti",
                      "## Credits",
-                     "Based on [Jake" + "schincariol/day-trader-skill](https://github.com/Jake" + "schincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef.",
-                     "## Fine print"):
-            self.assertIn(line, readme)
+                     "Based on [Jake" + "schincariol/day-trader-skill](https://github.com/Jake" + "schincariol/day-trader-skill) (MIT), upstream commit 3d0f4ef."):
+            self.assertIn(line, readme_en)
         for s in SKILLS:
-            self.assertIn("/" + s, readme, s)
+            self.assertIn("/" + s, readme_en, s)
 
     def test_no_em_dashes_and_no_personal_email(self):
         for path in every_text_file():

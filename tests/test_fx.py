@@ -96,6 +96,8 @@ class FxProfileTest(unittest.TestCase):
         lines = "\n".join(exit_mod.describe(plan, p=self.fx))
         self.assertIn("155.230", lines)
         self.assertIn("pips", lines)
+        self.assertIn("Risk per unit", lines)
+        self.assertNotIn("Risk a share", lines)
 
         # alerts.py evaluate on USDJPY=X -> 3 decimals
         st = alerts.market_status(market.local_to_utc(self.fx, datetime.datetime(2026, 11, 26, 4, 5)), p=self.fx)
@@ -225,6 +227,8 @@ class FxCliTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue("TRIGGERED" in r.stdout or "WAITING" in r.stdout, r.stdout)
+        self.assertIn("BEFORE you enter", r.stdout)
+        self.assertNotIn("BEFORE you buy", r.stdout)
 
     def test_idx_cli_sell_still_refused(self):
         r = self._run_cli(
@@ -292,6 +296,8 @@ class FxCliTest(unittest.TestCase):
         )
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("at 3:20 AM", r.stdout)
+        self.assertIn("per unit", r.stdout)
+        self.assertNotIn("a share", r.stdout)
 
 
 class FxPipelineTest(unittest.TestCase):

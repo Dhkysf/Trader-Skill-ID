@@ -745,7 +745,8 @@ def build_plan(a, now_utc):
 def describe(plan, p=None):
     prof = p or (market.load(plan["market"]) if plan.get("market") else _IDX)
     day = datetime.date.fromisoformat(plan["date"])
-    setup = {"orb": "opening-range breakout", "level": "close above a level"}.get(plan["setup"], plan["setup"])
+    lvl_desc = "close below a level" if plan.get("side") == "sell" else "close above a level"
+    setup = {"orb": "opening-range breakout", "level": lvl_desc}.get(plan["setup"], plan["setup"])
     e = D(plan["entry"])
     risk = D(plan["risk_per_share"])
     pct = (risk / e * 100).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -764,7 +765,8 @@ def describe(plan, p=None):
     out.append("  Stop          %s  %s%s%s" % (_money(plan["stop"], prof, symbol=sym), plan["stop_label"], pip_s,
                                                (": " + plan["stop_detail"]) if plan.get("stop_detail") else ""))
     out.append("  Target        %s  %s%s" % (_money(plan["target"], prof, symbol=sym), plan["target_label"], t_pip_s))
-    out.append("  Risk a share  %s (%s%% of the entry)%s" % (_money(plan["risk_per_share"], prof, symbol=sym), pct, pip_s))
+    risk_lbl = "Risk per unit " if market.is_fx(prof) else "Risk a share  "
+    out.append("  %s%s (%s%% of the entry)%s" % (risk_lbl, _money(plan["risk_per_share"], prof, symbol=sym), pct, pip_s))
     out.append("  Reward:risk   %s" % ratio(plan["reward_risk"]))
     if plan.get("flat_by"):
         out.append("  Flat by       %s %s, win or lose: no overnight hold" % (plan["flat_by"], _tz_label(prof)))
