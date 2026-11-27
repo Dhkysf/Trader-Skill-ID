@@ -863,8 +863,11 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
 # ---------------------------------------------------------------- commands
 
 def _opts(a, cfg):
+    p = market.from_config(cfg)
     if a.side in ("sell", "short"):
-        raise EntryError("v2 plans longs only: no short entries. Watch for a buy (--side buy) instead.")
+        if not market.allows_short(p, cfg):
+            raise EntryError("v2 plans longs only: no short entries. Watch for a buy (--side buy) instead.")
+        raise EntryError("short entries are not implemented yet; watch for a buy (--side buy)")
     if a.setup == "orb" and a.level is not None:
         raise EntryError("--level is for --setup level (an orb's level is its range high)")
     if a.min_volume_x is not None and a.min_volume_x <= 0:

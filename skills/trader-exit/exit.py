@@ -571,12 +571,15 @@ def resolve_flat_by(day, explicit, cfg, entry_time, p=None):
     return hm(t), note
 
 
-def gather(a):
+def gather(a, p=None, cfg=None):
     """The entry facts, from trader/entry.json or the flags."""
+    prof = p or _IDX
     if a.symbol and a.from_path:
         raise PlanError("use --from or --symbol, not both")
     if a.side in ("sell", "short"):
-        raise PlanError("v2 plans longs only: no stops above a short entry. Plan a buy instead.")
+        if not market.allows_short(prof, cfg):
+            raise PlanError("v2 plans longs only: no stops above a short entry. Plan a buy instead.")
+        raise PlanError("short exit planning is not implemented yet")
     if a.symbol:
         if a.entry is None:
             raise PlanError("--symbol needs --entry PRICE")
@@ -590,7 +593,9 @@ def gather(a):
         path = a.from_path or "trader/entry.json"
         doc = read_json(path, "entry (run /trader-entry first, or give --symbol and --entry)")
         if str(doc.get("side") or "buy").lower() not in ("buy", "long"):
-            raise PlanError("%s is a %s: v2 plans longs only" % (path, doc.get("side")))
+            if not market.allows_short(prof, cfg):
+                raise PlanError("%s is a %s: v2 plans longs only" % (path, doc.get("side")))
+            raise PlanError("%s is a %s: short exit planning is not implemented yet" % (path, doc.get("side")))
         if doc.get("status") != "triggered" and a.entry is None:
             raise PlanError("%s says %s is %s, not triggered: plan once it triggers, or give --entry PRICE to plan ahead"
                             % (path, doc.get("symbol"), doc.get("status") or "unknown"))
@@ -613,9 +618,9 @@ def gather(a):
 
 
 def build_plan(a, now_utc):
-    info = gather(a)
     cfg = read_config(a.config)
     p = market.from_config(cfg)
+    info = gather(a, p=p, cfg=cfg)
     info["symbol"] = market.base_symbol(p, info["symbol"])
     stop_text = a.stop
     if not stop_text:

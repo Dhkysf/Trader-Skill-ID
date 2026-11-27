@@ -16,6 +16,7 @@ size = load("trader-budget", "size")
 check = load("trader-risk", "check")
 entry = load("trader-entry", "entry")
 timemachine = load("trader-timemachine", "timemachine")
+alerts = load("trader-alerts", "alerts")
 ticket = load("trader-broker", "ticket")
 
 
@@ -207,8 +208,8 @@ class PrecisionTest(unittest.TestCase):
     def _fx_cfg(self):
         return {
             "market": "fx-test",
-            "budget": 10000,
-            "max_loss_per_trade": 100,
+            "budget": 200000,
+            "max_loss_per_trade": 500,
             "max_position_pct": 100,
             "cash_buffer_pct": 0,
             "min_reward_risk": 1.5,
@@ -217,7 +218,7 @@ class PrecisionTest(unittest.TestCase):
 
     def _fx_plan(self):
         return {
-            "symbol": "EUR.US",
+            "symbol": "EURUSD",
             "side": "buy",
             "market": "fx-test",
             "date": "2026-11-23",
@@ -281,6 +282,116 @@ class PrecisionTest(unittest.TestCase):
 
     def test_fx_profile_cleanup_no_leak(self):
         self.assertNotIn("fx-test", market.available())
+
+
+class CapabilitiesTest(unittest.TestCase):
+    def _use_fx_profile(self):
+        mods = [market]
+        if "market" in sys.modules and sys.modules["market"] is not market:
+            mods.append(sys.modules["market"])
+        prof_dir = os.path.join(FIX, "profiles")
+        for m in mods:
+            orig_dir = m.MARKETS_DIR
+            orig_cache = dict(m._CACHE)
+            m.MARKETS_DIR = prof_dir
+            self.addCleanup(setattr, m, "MARKETS_DIR", orig_dir)
+            self.addCleanup(lambda mod=m, snap=orig_cache: (mod._CACHE.clear(), mod._CACHE.update(snap)))
+        return market.load("fx-test")
+
+    def test_idx_short_and_margin_still_blocked_with_old_reasons(self):
+        cfg = {"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}
+        now = check.parse_now("2026-11-23 10:15", p=market.load("idx"))
+        buy_ord = {
+            "symbol": "BBCA", "side": "buy", "qty": "300", "type": "limit",
+            "limit_price": "9875", "time_in_force": "day", "market": "idx",
+            "stop_loss_stop_price": "9700", "take_profit_limit_price": "10225",
+        }
+        sell_ord = dict(buy_ord, side="sell")
+        res_sh = check.check([sell_ord], dict(cfg, allow_short=True), now=now)
+        self.assertEqual(res_sh["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any("short selling is not supported on IDX" in r for r in res_sh["results"][0]["reasons"]))
+
+        res_sh_off = check.check([sell_ord], cfg, now=now)
+        self.assertEqual(res_sh_off["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any("short selling is off" in r for r in res_sh_off["results"][0]["reasons"]))
+
+        res_mg = check.check([buy_ord], dict(cfg, budget=1000000, allow_margin=True), now=now)
+        self.assertEqual(res_mg["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any("margin orders are not allowed on IDX" in r for r in res_mg["results"][0]["reasons"]))
+
+    def test_idx_symbol_pattern_blocks_warrant_and_allows_jk_suffix(self):
+        cfg = {"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}
+        now = check.parse_now("2026-11-23 10:15", p=market.load("idx"))
+        warrant = {
+            "symbol": "BUKA-W", "side": "buy", "qty": "100", "type": "limit",
+            "limit_price": "100", "time_in_force": "day", "market": "idx",
+            "stop_loss_stop_price": "90", "take_profit_limit_price": "120",
+        }
+        res_w = check.check([warrant], cfg, now=now)
+        self.assertEqual(res_w["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(
+            "only ordinary shares (4-letter codes); warrants and rights (-W, -R) are not supported" in r
+            for r in res_w["results"][0]["reasons"]
+        ))
+
+        jk_ord = {
+            "symbol": "bbca.jk", "side": "buy", "qty": "300", "type": "limit",
+            "limit_price": "9875", "time_in_force": "day", "market": "idx",
+            "stop_loss_stop_price": "9700", "take_profit_limit_price": "10225",
+        }
+        res_jk = check.check([jk_ord], cfg, now=now)
+        self.assertEqual(res_jk["results"][0]["verdict"], "PASS", res_jk["results"][0]["reasons"])
+
+    def test_fx_short_eurusd_passes_and_swaps_fees(self):
+        self._use_fx_profile()
+        cfg = {
+            "market": "fx-test",
+            "budget": 200000,
+            "max_loss_per_trade": 2000,
+            "max_position_pct": 100,
+            "cash_buffer_pct": 0,
+            "min_reward_risk": 1.5,
+            "min_order": 1,
+            "buy_fee_pct": 0.1,
+            "sell_fee_pct": 0.5,
+        }
+        sell_ord = {
+            "symbol": "EURUSD", "side": "sell", "qty": "100000", "type": "limit",
+            "limit_price": "1.0850", "time_in_force": "day", "market": "fx-test",
+            "stop_loss_stop_price": "1.0880", "take_profit_limit_price": "1.0790",
+        }
+        res_off = check.check([sell_ord], cfg, today="2026-11-23")
+        self.assertEqual(res_off["results"][0]["verdict"], "BLOCK")
+        self.assertTrue(any(r.startswith("short:") for r in res_off["results"][0]["reasons"]))
+
+        res_on = check.check([sell_ord], dict(cfg, allow_short=True), today="2026-11-23")
+        r = res_on["results"][0]
+        self.assertEqual(r["verdict"], "PASS", r["reasons"])
+        # Swapped fees for short: entry 1.0850 * sell_fee (0.5%) + stop 1.0880 * buy_fee (0.1%)
+        self.assertEqual(r["max_loss"], 951.3)
+
+        sell_x = dict(sell_ord, symbol="EURUSD=X")
+        res_x = check.check([sell_x], dict(cfg, allow_short=True), today="2026-11-23")
+        self.assertEqual(res_x["results"][0]["verdict"], "PASS", res_x["results"][0]["reasons"])
+
+    def test_alerts_three_sessions_and_ticket_lot_default(self):
+        p3 = {
+            "id": "three", "display_name": "THREE", "utc_offset_std": 0, "utc_offset_dst": 0,
+            "sessions": {"mon": [["08:00", "10:00"], ["11:00", "13:00"], ["14:00", "16:00"]]},
+            "holidays": {}, "currency": "USD", "price_decimals": 2,
+        }
+        st1 = alerts.market_status(datetime.datetime(2026, 11, 23, 10, 30), p=p3)
+        self.assertFalse(st1["open"])
+        self.assertEqual(st1["status"], "session break")
+        st2 = alerts.market_status(datetime.datetime(2026, 11, 23, 15, 0), p=p3)
+        self.assertTrue(st2["open"])
+        self.assertEqual(st2["status"], "session 3")
+
+        ord10 = {"symbol": "EURUSD", "side": "buy", "qty": "10", "type": "limit",
+                 "limit_price": "1.08", "stop_loss_stop_price": "1.07"}
+        txt = ticket.plain(ord10, p=p3, cfg={})
+        self.assertIn("10 shares", txt)
+        self.assertNotIn("lots", txt)
 
 
 if __name__ == "__main__":

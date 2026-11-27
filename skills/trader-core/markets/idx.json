@@ -1,7 +1,13 @@
 {
   "id": "idx",
+  "display_name": "IDX",
   "name": "Indonesia Stock Exchange (IDX/BEI)",
   "exchange": "IDX",
+  "allow_short": false,
+  "allow_margin": false,
+  "symbol_pattern": "^[A-Z]{4}$",
+  "symbol_hint": "only ordinary shares (4-letter codes); warrants and rights (-W, -R) are not supported",
+  "calendar_url": "https://www.idx.co.id/id/produk/mekanisme-dan-jam-perdagangan/",
   "timezone": "asia_jakarta",
   "tz_label": "WIB",
   "utc_offset_std": 7,
@@ -19,7 +25,9 @@
     "no_entries_before": "09:15",
     "no_entries_after": "15:30",
     "flat_by": "15:45",
-    "no_entries_before_break_min": 10
+    "no_entries_before_break_min": 10,
+    "min_price": 100,
+    "min_value": 5000000000
   },
   "holidays": {
     "2026-01-01": "IDX trading holiday",

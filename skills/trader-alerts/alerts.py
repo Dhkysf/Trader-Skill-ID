@@ -104,7 +104,7 @@ def market_status(now_utc, p=None):
         reason = ""
     else:
         name = holidays.get(d.isoformat())
-        reason = ("%s holiday: %s" % (p.get("exchange", "IDX"), name)) if name else "weekend"
+        reason = ("%s holiday: %s" % (market.display_name(p), name)) if name else "weekend"
     st = {"now_local": local.strftime("%Y-%m-%d %H:%M"), "date": d.isoformat(),
           "weekday": local.strftime("%A"), "calendar_known": d.year in cal_years,
           "open": False, "reason": reason, "early_close": early_dates.get(d.isoformat()),
@@ -124,24 +124,26 @@ def market_status(now_utc, p=None):
             st["status"] = "pre-open"
             st["reason"] = "pre-open"
             st["next_open"] = "%s %s" % (d.isoformat(), st["opens"])
-        elif sess[0][0] <= t < sess[0][1]:
-            st["status"] = "session 1"
-            st["open"] = True
-            st["reason"] = "session 1"
-        elif len(sess) >= 2 and sess[0][1] <= t < sess[1][0]:
-            st["status"] = "lunch break"
-            st["reason"] = "lunch break"
-            st["next_open"] = "%s %s" % (d.isoformat(), sess[1][0].strftime("%H:%M"))
-        elif len(sess) >= 2 and sess[1][0] <= t < sess[1][1]:
-            st["status"] = "session 2"
-            st["open"] = True
-            st["reason"] = "session 2"
-        elif pre_closing and pc_start <= t < pc_end:
-            st["status"] = "pre-closing"
-            st["reason"] = "pre-closing"
         else:
-            st["status"] = "closed"
-            st["reason"] = "closed"
+            for idx, (o, c) in enumerate(sess, 1):
+                if o <= t < c:
+                    st["status"] = "session %d" % idx
+                    st["open"] = True
+                    st["reason"] = "session %d" % idx
+                    break
+                if idx < len(sess) and c <= t < sess[idx][0]:
+                    brk = "lunch break" if len(sess) == 2 else "session break"
+                    st["status"] = brk
+                    st["reason"] = brk
+                    st["next_open"] = "%s %s" % (d.isoformat(), sess[idx][0].strftime("%H:%M"))
+                    break
+            else:
+                if pre_closing and pc_start <= t < pc_end:
+                    st["status"] = "pre-closing"
+                    st["reason"] = "pre-closing"
+                else:
+                    st["status"] = "closed"
+                    st["reason"] = "closed"
     if "next_open" not in st:
         nd = d + datetime.timedelta(days=1)
         for _ in range(15):
@@ -369,7 +371,7 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
     """Pure function. Returns (rings, new_state). Each ring: {id, symbol, message}."""
     prof = p or (market.load(status["market"]) if status.get("market") else _IDX)
     tz_lbl = _tz_label(prof)
-    ex = prof.get("exchange", "IDX")
+    ex = market.display_name(prof)
     state = json.loads(json.dumps(state or {}))
     rung = state.setdefault("rung", {})
     today = status["date"]
@@ -501,7 +503,7 @@ def cmd_clock(a):
         print(json.dumps(st, indent=2))
     else:
         tz_lbl = _tz_label(p)
-        ex = p.get("exchange", "IDX")
+        ex = market.display_name(p)
         print("%s %s (%s): %s %s, %s." % (tz_lbl, st["now_local"], st["weekday"], ex,
                                           "OPEN" if st["open"] else "closed", st["reason"]))
         if st.get("sessions"):
@@ -567,7 +569,7 @@ def cmd_check(a):
         print(json.dumps({"market": status, "rings": rings, "errors": errors,
                           "quotes": {s: q["price"] for s, q in quotes.items()}}, indent=2))
     else:
-        ex = p.get("exchange", "IDX")
+        ex = market.display_name(p)
         tz_lbl = _tz_label(p)
         print("%s %s (%s %s, %s)." % (ex, "OPEN" if status["open"] else "closed", status["now_local"],
                                       tz_lbl, status["reason"]))

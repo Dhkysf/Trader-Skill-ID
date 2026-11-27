@@ -454,7 +454,12 @@ def main(argv=None):
     now = parse_time(args.now) if args.now else _dt.datetime.now(_dt.timezone.utc)
     state = load_json(args.state) or {}
     errors = []
-    watch = {(k[:-3] if k.endswith(".JK") else k): v for k, v in watch.items()}
+    norm_watch = {}
+    for k, v in watch.items():
+        bk = market.base_symbol(p, k)
+        if bk not in norm_watch or (not norm_watch[bk] and v):
+            norm_watch[bk] = v
+    watch = norm_watch
     uni_names = names_from_universe(args.universe)
     for k in list(watch):
         if not watch[k] and uni_names.get(k):

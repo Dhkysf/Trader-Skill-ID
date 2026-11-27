@@ -356,8 +356,9 @@ def load_offline(path, p=None):
 
 # ---------------------------------------------------------------- universe
 
-def parse_idx_universe(text):
+def parse_idx_universe(text, p=None):
     """IDX Daftar Saham CSV (',' or ';' separated) or plain text (one code per line) -> (kept, counts)."""
+    prof = p or _IDX
     clean = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
     lines = [ln for ln in clean.split("\n") if ln.strip()]
     if not lines:
@@ -376,11 +377,7 @@ def parse_idx_universe(text):
             for r in rows[1:]:
                 if len(r) <= i_code:
                     continue
-                sym = r[i_code].strip().upper()
-                if not sym:
-                    continue
-                if sym.endswith(".JK"):
-                    sym = sym[:-3]
+                sym = market.base_symbol(prof, r[i_code])
                 counts["rows"] += 1
                 if i_board is not None and len(r) > i_board:
                     board = " ".join(r[i_board].strip().lower().split())
@@ -396,9 +393,7 @@ def parse_idx_universe(text):
         if not s or s.startswith("#"):
             continue
         parts = s.split("|", 1)
-        sym = parts[0].strip().upper()
-        if sym.endswith(".JK"):
-            sym = sym[:-3]
+        sym = market.base_symbol(prof, parts[0])
         if not sym:
             continue
         counts["rows"] += 1
@@ -780,16 +775,26 @@ def write_json(path, doc):
 
 # ---------------------------------------------------------------- commands
 
+def _profile_scan_defaults(p):
+    defs = (p or {}).get("defaults") or {}
+    min_price = defs["min_price"] if defs.get("min_price") is not None else (p or {}).get("min_price", 0.0)
+    min_value = defs["min_value"] if defs.get("min_value") is not None else (p or {}).get("min_value", 0.0)
+    return float(min_price), float(min_value)
+
+
 def cmd_universe(a):
     t0 = time.time()
-    market.from_config(a.config)
+    p = market.from_config(a.config)
+    disp = market.display_name(p)
     if not a.from_file:
-        raise ScanError("IDX universe requires --from <file> (e.g. --from data\\daftar-saham.csv); "
-                        "automatic download from idx.co.id is not used")
+        site = market.source_host(p)
+        via = (" from %s" % site) if site else ""
+        raise ScanError("%s universe requires --from <file> (e.g. --from data\\daftar-saham.csv); "
+                        "automatic download%s is not used" % (disp, via))
     if not os.path.exists(a.from_file):
         raise ScanError("no universe file at %s" % a.from_file)
     with open(a.from_file, encoding="utf-8-sig", errors="replace") as fh:
-        kept, counts = parse_idx_universe(fh.read())
+        kept, counts = parse_idx_universe(fh.read(), p=p)
     if not a.no_write:
         d = os.path.dirname(a.out)
         if d:
@@ -803,8 +808,8 @@ def cmd_universe(a):
                           "dropped": dropped, "out": None if a.no_write else a.out,
                           "seconds": round(time.time() - t0, 1)}, indent=2))
     else:
-        print("IDX symbol list (%s): %s rows." % (a.from_file, "{:,}".format(counts.get("rows", 0))))
-        print("Kept %s IDX stocks." % "{:,}".format(len(kept)))
+        print("%s symbol list (%s): %s rows." % (disp, a.from_file, "{:,}".format(counts.get("rows", 0))))
+        print("Kept %s %s stocks." % ("{:,}".format(len(kept)), disp))
         if dropped:
             print("Dropped: " + ", ".join("%s %s" % ("{:,}".format(v), k)
                                           for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])) + ".")
@@ -817,9 +822,10 @@ def cmd_daily(a):
     t0 = time.time()
     cfg = read_config(a.config)
     p = market.from_config(cfg)
-    min_price = a.min_price if a.min_price is not None else 100.0
+    prof_min_price, prof_min_value = _profile_scan_defaults(p)
+    min_price = a.min_price if a.min_price is not None else prof_min_price
     min_volume = a.min_volume if a.min_volume is not None else 0
-    min_value = a.min_value if a.min_value is not None else float(cfg.get("min_value_idr", 5000000000))
+    min_value = a.min_value if a.min_value is not None else float(cfg.get("min_value_idr", prof_min_value))
     now = _parse_now_in(a.now, p)
     offline_syms = None
     if a.offline:
@@ -897,7 +903,8 @@ def cmd_orb(a):
     t0 = time.time()
     cfg = read_config(a.config)
     p = market.from_config(cfg)
-    min_price = a.min_price if a.min_price is not None else 100.0
+    prof_min_price, _ = _profile_scan_defaults(p)
+    min_price = a.min_price if a.min_price is not None else prof_min_price
     min_volume = a.min_volume if a.min_volume is not None else 0
     tz = _tz_label(p)
     now = _parse_now_in(a.now, p)

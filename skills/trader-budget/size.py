@@ -321,8 +321,12 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if not sym:
         raise SizeError("the plan has no symbol (run trader-exit)")
     side = str(plan.get("side") or "buy").strip().lower()
+    if side == "short":
+        side = "sell"
     if side != "buy":
-        raise SizeError("this pack sizes long (buy) day trades only; the plan says %r" % side)
+        if side != "sell" or not market.allows_short(p, c):
+            raise SizeError("this pack sizes long (buy) day trades only; the plan says %r" % side)
+    long = (side == "buy")
     if today and plan.get("date") and str(plan["date"]) != today:
         raise SizeError("the plan is for %s and today is %s (%s): make a new plan with trader-exit"
                         % (plan["date"], today, _place_label(p)))
@@ -345,26 +349,35 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     _norm = lambda x: float(x)
     if limit is not None:
         ref, ref_from = _norm(limit), "limit"
-    elif price is not None and _norm(price) > _norm(entry_plan):
+    elif price is not None and ((long and _norm(price) > _norm(entry_plan))
+                                or (not long and _norm(price) < _norm(entry_plan))):
         ref, ref_from = _norm(price), "price"
     else:
         ref, ref_from = _norm(entry_plan), "plan"
     stop, target = _norm(stop), _norm(target)
-    if stop >= ref:
-        raise SizeError("the stop %s is not below the entry %s; a long trade needs its stop underneath"
-                        % (_px(stop, p), _px(ref, p)))
-    if target <= ref:
-        raise SizeError("the target %s is not above the entry %s: the move has already happened. "
-                        "Skip it or make a new plan with trader-exit" % (_px(target, p), _px(ref, p)))
+    if long:
+        if stop >= ref:
+            raise SizeError("the stop %s is not below the entry %s; a long trade needs its stop underneath"
+                            % (_px(stop, p), _px(ref, p)))
+        if target <= ref:
+            raise SizeError("the target %s is not above the entry %s: the move has already happened. "
+                            "Skip it or make a new plan with trader-exit" % (_px(target, p), _px(ref, p)))
+    else:
+        if stop <= ref:
+            raise SizeError("the stop %s is not above the entry %s; a short trade needs its stop above"
+                            % (_px(stop, p), _px(ref, p)))
+        if target >= ref:
+            raise SizeError("the target %s is not below the entry %s: the move has already happened. "
+                            "Skip it or make a new plan with trader-exit" % (_px(target, p), _px(ref, p)))
     d_entry = market._to_decimal(ref)
     d_stop = market._to_decimal(stop)
     d_target = market._to_decimal(target)
-    d_risk = d_entry - d_stop
-    d_reward = d_target - d_entry
+    d_risk = (d_entry - d_stop) if long else (d_stop - d_entry)
+    d_reward = (d_target - d_entry) if long else (d_entry - d_target)
     risk = float(d_risk)
     d_buy = market._to_decimal(buy_fee_pct) / Decimal("100")
     d_sell = market._to_decimal(sell_fee_pct) / Decimal("100")
-    risk_per_share_net = d_risk + d_entry * d_buy + d_stop * d_sell
+    risk_per_share_net = d_risk + (d_entry * d_buy + d_stop * d_sell if long else d_entry * d_sell + d_stop * d_buy)
 
     cash_buffer = round(budget * buf_pct / 100.0, 2)
     available = budget - cash_buffer
@@ -392,14 +405,16 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     if max_order:
         limits.append({"name": "max order", "usd": max_order, "per": ref, "shares": shares_for(max_order, ref, lot=lot),
                        "how": "%s / %s" % (money(max_order, p), _px(ref, p))})
-    cash_per = d_entry * (Decimal("1") + d_buy) if buy_fee_pct > 0 else d_entry
+    d_entry_fee = d_buy if long else d_sell
+    entry_fee_pct = buy_fee_pct if long else sell_fee_pct
+    cash_per = d_entry * (Decimal("1") + d_entry_fee) if entry_fee_pct > 0 else d_entry
     cash_shares = shares_for(available, cash_per, lot=lot)
-    if cash_shares > 0 and buy_fee_pct > 0:
+    if cash_shares > 0 and entry_fee_pct > 0:
         step = Decimal("1") if p.get("currency") == "IDR" else Decimal("0.01")
         d_avail = market._to_decimal(available)
         while cash_shares > 0:
             val = d_entry * cash_shares
-            fee = (val * d_buy).quantize(step, rounding=ROUND_HALF_UP)
+            fee = (val * d_entry_fee).quantize(step, rounding=ROUND_HALF_UP)
             if val + fee <= d_avail:
                 break
             cash_shares -= lot
@@ -444,7 +459,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         refusal = ("%d share%s of %s is %s, under your %s minimum order. No order."
                    % (qty, "" if qty == 1 else "s", sym, money(cost, p), money(c["min_order"], p)))
     out = {
-        "symbol": sym, "side": "buy", "setup": plan.get("setup", ""), "date": plan.get("date"),
+        "symbol": sym, "side": side, "setup": plan.get("setup", ""), "date": plan.get("date"),
         "entry_time": plan.get("entry_time", ""), "entry_plan": _norm(entry_plan),
         "entry": ref, "entry_from": ref_from, "stop": stop, "target": target,
         "risk_per_share": risk, "reward_risk": round(float(d_reward / d_risk), 2),
@@ -468,7 +483,7 @@ def bracket_order(s):
     if s["refusal"] or s["qty"] <= 0:
         return None
     p = market.load(s.get("market") or "idx")
-    o = {"symbol": s["symbol"], "side": "buy", "qty": str(int(s["qty"])), "type": s["order_type"],
+    o = {"symbol": s["symbol"], "side": s.get("side", "buy"), "qty": str(int(s["qty"])), "type": s["order_type"],
          "time_in_force": "day", "market": p["id"]}
     if s["order_type"] == "limit":
         o["limit_price"] = _ord_price(s["entry"], p)

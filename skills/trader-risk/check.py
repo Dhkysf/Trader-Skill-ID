@@ -295,6 +295,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     now          naive UTC (default: the real clock); its local date is "today"
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     p = market.from_config(cfg)
+    disp = market.display_name(p)
     c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
     dec = market.price_decimals(p)
     out_dec = max(2, dec)
@@ -405,9 +406,11 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                                "(\"allow_options\": false)" % sym)
             else:
                 warns.append("option order: options can lose 100%% of what you pay")
-        elif sym and ("/" in sym or not TICKER.match(sym)):
-            reasons.append("asset: %s does not look like a stock ticker; "
-                           "this pack trades stocks only" % sym)
+        elif sym and not market.valid_symbol(p, sym):
+            if p.get("symbol_hint"):
+                reasons.append("asset: %s: %s" % (sym, p["symbol_hint"]))
+            else:
+                reasons.append("asset: %s does not match %s symbol format" % (sym, disp))
 
         # the reference price: what one share costs to get in
         plan_entry = _f(plan.get("entry"))
@@ -432,10 +435,10 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         q = _f(qty)
         if lot > 1:
             if notional is not None:
-                reasons.append("lot: IDX orders must use qty in whole lots of %d shares, not notional" % lot)
+                reasons.append("lot: %s orders must use qty in whole lots of %d shares, not notional" % (disp, lot))
             elif q is not None and (abs(q - round(q)) > 1e-9 or int(round(q)) % lot != 0):
-                reasons.append("lot: qty %s is not a multiple of %d shares (1 IDX lot = %d shares)"
-                               % (_num(q), lot, lot))
+                reasons.append("lot: qty %s is not a multiple of %d shares (1 %s lot = %d shares)"
+                               % (_num(q), lot, disp, lot))
         if p.get("tick_table"):
             seen_ticks = set()
             tick_checks = []
@@ -451,8 +454,8 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     tick_checks.append((label, v))
             for label, v in tick_checks:
                 if not market.valid_tick(p, v):
-                    reasons.append("tick: %s %s is not on a valid IDX tick (tick size %s at this price)"
-                                   % (label, _px(v, p), _px(market.tick_size(p, v), p)))
+                    reasons.append("tick: %s %s is not on a valid %s tick (tick size %s at this price)"
+                                   % (label, _px(v, p), disp, _px(market.tick_size(p, v), p)))
         if notional is not None and _f(notional):
             value = _f(notional)
         elif q:
@@ -499,9 +502,12 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             cash_need = value + buy_fee
             after_cash = cash - cash_need
             if after_cash < -tol:
-                if c.get("allow_margin"):
-                    later.append("cash: needs %s but only %s cash; margin orders are not allowed on IDX"
+                if market.allows_margin(p, c):
+                    warns.append("margin: needs %s with %s cash (using margin)"
                                  % (money(cash_need, p), money(cash, p)))
+                elif c.get("allow_margin"):
+                    later.append("cash: needs %s but only %s cash; margin orders are not allowed on %s"
+                                 % (money(cash_need, p), money(cash, p), disp))
                 else:
                     later.append("cash: needs %s but only %s cash; that would be margin (borrowed money)"
                                  % (money(cash_need, p), money(cash, p)))
@@ -522,9 +528,11 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
             else:
                 over = held <= 0
             if over:
-                if c.get("allow_short"):
-                    reasons.append("short: short selling is not supported on IDX (selling %s %s while holding %s)"
-                                   % (_num(q) if q is not None else money(value, p), sym, _num(held)))
+                if market.allows_short(p, c):
+                    pass
+                elif c.get("allow_short"):
+                    reasons.append("short: short selling is not supported on %s (selling %s %s while holding %s)"
+                                   % (disp, _num(q) if q is not None else money(value, p), sym, _num(held)))
                 else:
                     reasons.append("short: selling more %s than you hold (%s shares); short selling is off. "
                                    "If you bought it, record the fill first (ticket.py fill)" % (sym, _num(held)))
@@ -563,7 +571,10 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     if has_fees:
                         d_buy = market._to_decimal(buy_fee_pct) / Decimal("100")
                         d_sell = market._to_decimal(sell_fee_pct) / Decimal("100")
-                        d_rps = d_risk + d_ref * d_buy + d_stop * d_sell
+                        if long:
+                            d_rps = d_risk + d_ref * d_buy + d_stop * d_sell
+                        else:
+                            d_rps = d_risk + d_ref * d_sell + d_stop * d_buy
                     else:
                         d_rps = d_risk
                     max_loss = float((d_rps * market._to_decimal(shares)).quantize(

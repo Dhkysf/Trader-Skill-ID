@@ -5,13 +5,16 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import sys
+import urllib.parse
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP
 
 MARKETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "markets")
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _CACHE = {}
 _ROUND_MODES = {"down": ROUND_FLOOR, "up": ROUND_CEILING, "nearest": ROUND_HALF_UP}
+_DEFAULT_TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
 
 
 def available():
@@ -117,7 +120,7 @@ def calendar_note(p, day):
         return None
     return (
         "%s holidays for %d are not in markets/%s.json yet: holidays count as trading days. Add the official list."
-        % (p.get("exchange", "IDX"), d.year, p["id"])
+        % (display_name(p), d.year, p["id"])
     )
 
 
@@ -204,9 +207,11 @@ def ar_limits(p, reference_price, day=None):
     if rule is None:
         raise ValueError("no auto_rejection rule for %s" % day_s)
     if rule.get("valid_until") and day_s > rule["valid_until"]:
+        site = source_host(p, (rule.get("source") or {}).get("url"))
+        where = (" on %s" % site) if site else ""
         print(
-            "Warning: auto_rejection rule expired %s; check the current ARA/ARB rule on idx.co.id and update markets/idx.json"
-            % rule["valid_until"],
+            "Warning: auto_rejection rule expired %s; check the current ARA/ARB rule%s and update markets/%s.json"
+            % (rule["valid_until"], where, p["id"]),
             file=sys.stderr,
         )
     ref = _to_decimal(reference_price)
@@ -328,6 +333,43 @@ MONEY_LIMIT_ALIASES = (
     ("max_order", "max_order_usd"),
     ("min_order", "min_order_usd"),
 )
+
+
+def display_name(p):
+    """Short human label for profile `p` (e.g. 'IDX')."""
+    return (p or {}).get("display_name") or (p or {}).get("exchange") or (p or {}).get("id", "idx").upper()
+
+
+def allows_short(p, cfg=None):
+    """True only when BOTH profile `p` and config `cfg` allow short selling."""
+    return bool((p or {}).get("allow_short", False)) and bool((cfg or {}).get("allow_short", False))
+
+
+def allows_margin(p, cfg=None):
+    """True only when BOTH profile `p` and config `cfg` allow margin."""
+    return bool((p or {}).get("allow_margin", False)) and bool((cfg or {}).get("allow_margin", False))
+
+
+def valid_symbol(p, sym):
+    """True if `sym` (after base_symbol normalization) matches profile `p`'s symbol_pattern."""
+    s = base_symbol(p, sym)
+    if not s:
+        return False
+    pat = (p or {}).get("symbol_pattern")
+    if pat:
+        return bool(re.match(pat, s))
+    return "/" not in s and bool(_DEFAULT_TICKER.match(s))
+
+
+def source_host(p, url=None):
+    """Hostname (without www.) from `url` or profile `p`'s calendar_url, or ''."""
+    u = url or (p or {}).get("calendar_url") or ""
+    if not u:
+        return ""
+    host = urllib.parse.urlparse(u).netloc or u.split("/")[0]
+    if host.lower().startswith("www."):
+        host = host[4:]
+    return host.lower()
 
 
 def base_symbol(p, sym):

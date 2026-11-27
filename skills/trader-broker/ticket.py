@@ -173,8 +173,10 @@ def max_loss(order, p=None, cfg=None, rv=None):
     d_e, d_s, d_q = market._to_decimal(entry), market._to_decimal(stop), market._to_decimal(q)
     d_rps = abs(d_e - d_s)
     if has_fees:
-        d_rps += (d_e * market._to_decimal(buy_pct) / Decimal("100")
-                  + d_s * market._to_decimal(sell_pct) / Decimal("100"))
+        is_sell = str(order.get("side") or "buy").lower() == "sell"
+        e_pct, s_pct = (sell_pct, buy_pct) if is_sell else (buy_pct, sell_pct)
+        d_rps += (d_e * market._to_decimal(e_pct) / Decimal("100")
+                  + d_s * market._to_decimal(s_pct) / Decimal("100"))
     step = Decimal("10") ** -out_dec
     return float((d_rps * d_q).quantize(step, rounding=ROUND_HALF_UP)), stop
 
@@ -185,9 +187,9 @@ def plain_parts(order, p=None, cfg=None, rv=None):
     side = str(order.get("side", "")).upper()
     sym = market.base_symbol(prof, order.get("symbol")) or "?"
     typ = str(order.get("type", "market"))
-    lot = int(prof.get("lot", 100))
+    lot = int(prof.get("lot", 1))
     q = _f(order.get("qty"))
-    if q is not None and abs(q - round(q)) < 1e-9 and int(round(q)) % lot == 0:
+    if lot > 1 and q is not None and abs(q - round(q)) < 1e-9 and int(round(q)) % lot == 0:
         lots = int(round(q)) // lot
         qty_s = "%d lot%s (%d shares)" % (lots, "" if lots == 1 else "s", int(round(q)))
     else:
@@ -225,7 +227,7 @@ def amount_numbers(order, p=None, cfg=None, rv=None):
         v = _f(plan.get(k))
         if v is not None:
             nums.append(v)
-    lot = int((p or _IDX).get("lot", 100))
+    lot = int((p or _IDX).get("lot", 1))
     q = _f(order.get("qty"))
     if q is not None and lot > 1:
         nums.append(q / lot)
@@ -348,7 +350,7 @@ def render(order, idx, total, cfg, risk, state, today):
     ready, label, rv = status_of(order, risk, state, today)
     paper = cfg.get("paper", True)
     acct = "PAPER account" if paper else "LIVE ACCOUNT, REAL MONEY"
-    where = "manual (%s)" % (p.get("exchange") or p.get("id", "idx").upper())
+    where = "manual (%s)" % market.display_name(p)
     lines = ["ORDER %d of %d, %s, %s" % (idx, total, acct, where)]
     for part in plain_parts(order, p=p, cfg=cfg, rv=rv):
         lines.append("  " + part)
@@ -357,7 +359,7 @@ def render(order, idx, total, cfg, risk, state, today):
     lines.append("  " + label)
     for w in (rv or {}).get("warnings", []):
         lines.append("  note: " + w)
-    lines.append("  IDX orders are manual: no broker API or MCP tool is called.")
+    lines.append("  %s orders are manual: no broker API or MCP tool is called." % market.display_name(p))
     if ready:
         lines.append("  Reply \"yes\" to confirm this one order, or \"no\" to skip it.")
     return "\n".join(lines), ready
