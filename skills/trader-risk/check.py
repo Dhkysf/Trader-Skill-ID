@@ -59,7 +59,6 @@ so trader-broker only shows an order as ready if THIS exact order passed today.
 import argparse
 import datetime
 from decimal import Decimal, ROUND_HALF_UP
-import hashlib
 import json
 import os
 import re
@@ -78,10 +77,7 @@ DEFAULTS = {
     "no_entries_before": "09:15", "no_entries_after": "15:30", "flat_by": "15:45",
     "paper": True, "blocked": [], "allow_options": False, "allow_margin": False, "allow_short": False,
 }
-ORDER_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
-                "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
-                "order_class", "take_profit_limit_price", "stop_loss_stop_price",
-                "stop_loss_limit_price", "advanced_instructions")
+ORDER_FIELDS = market.ORDER_FIELDS
 PRICE_FIELDS = ("qty", "notional", "limit_price", "stop_price", "take_profit_limit_price",
                 "stop_loss_stop_price", "stop_loss_limit_price")
 TYPES = {"market", "limit", "stop", "stop_limit", "trailing_stop"}
@@ -223,11 +219,7 @@ def read_json(path, what, required=True):
         raise RiskError("%s is not valid JSON: %s" % (path, e))
 
 
-def fingerprint(order):
-    """Same function in trader-broker/ticket.py: the exact order that was checked."""
-    core = {k: order[k] for k in ORDER_FIELDS if k in order and order[k] is not None}
-    blob = json.dumps(core, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+fingerprint = market.order_fingerprint
 
 
 def _f(x):

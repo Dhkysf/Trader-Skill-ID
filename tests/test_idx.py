@@ -908,6 +908,46 @@ class IdxBrokerTest(unittest.TestCase):
                 ok, why = ticket.parse_yes(reply, order, p=idx, cfg=cfg, universe_path=uni_p)
                 self.assertTrue(ok, "%r should pass, got: %s" % (reply, why))
 
+    def test_fingerprint_covers_market_and_plan_stop(self):
+        order = {
+            "symbol": "BBCA", "side": "buy", "qty": "300", "type": "limit",
+            "time_in_force": "day", "limit_price": "9875", "market": "idx",
+            "plan": {"entry": 9875, "stop": 9700, "target": 10200, "prev_close": 9850},
+        }
+        self.assertEqual(check.fingerprint(order), ticket.fingerprint(order))
+        self.assertNotEqual(check.fingerprint(order), check.fingerprint(dict(order, market="forex")))
+
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            orders_p = os.path.join(d, "orders.json")
+            risk_p = os.path.join(d, "risk.json")
+            state_p = os.path.join(d, "broker.json")
+            none_p = os.path.join(d, "none")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}, fh)
+            with open(orders_p, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [order]}, fh)
+
+            with redirect_stdout(io.StringIO()):
+                rc = check.main(["--orders", orders_p, "--config", cfg_p, "--portfolio", none_p,
+                                 "--prices", none_p, "--state", state_p, "--now", "2026-11-23 10:15",
+                                 "--out", risk_p])
+            self.assertEqual(rc, 0)
+
+            common = ["--orders", orders_p, "--config", cfg_p, "--risk", risk_p,
+                      "--state", state_p, "--now", "2026-11-23 10:15"]
+            code, text, _ = self._run_ticket(["show", "--index", "1"] + common)
+            self.assertEqual(code, 0)
+            self.assertIn("READY: trader-risk PASS", text)
+
+            edited = dict(order, plan=dict(order["plan"], stop=5000))
+            with open(orders_p, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [edited]}, fh)
+            code2, text2, _ = self._run_ticket(["show", "--index", "1"] + common)
+            self.assertEqual(code2, 1)
+            self.assertIn("NOT READY", text2)
+            self.assertIn("run check.py again", text2)
+
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):
     def test_determinism_on_bbca(self):

@@ -34,7 +34,6 @@ WIB dates; --now "2026-11-23 09:35" pins the clock.
 import argparse
 import datetime
 from decimal import Decimal, ROUND_HALF_UP
-import hashlib
 import json
 import os
 import re
@@ -47,10 +46,7 @@ import market  # noqa: E402
 
 _IDX = market.load("idx")
 
-ORDER_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
-                "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
-                "order_class", "take_profit_limit_price", "stop_loss_stop_price",
-                "stop_loss_limit_price", "advanced_instructions")
+ORDER_FIELDS = market.ORDER_FIELDS
 TIF_WORDS = {"day": "good for today", "gtc": "good until canceled", "opg": "at the open",
              "cls": "at the close", "ioc": "immediate or cancel", "fok": "fill or kill"}
 YES_WORDS = ("yes", "y")
@@ -121,11 +117,7 @@ def rec_day(rec):
 
 # ---------------------------------------------------------------- the order
 
-def fingerprint(order):
-    """Same function as trader-risk/check.py: identifies the exact order."""
-    core = {k: order[k] for k in ORDER_FIELDS if k in order and order[k] is not None}
-    blob = json.dumps(core, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+fingerprint = market.order_fingerprint
 
 
 def _str_num(v):

@@ -2,6 +2,7 @@
 """Shared market profiles and clock helpers for Trader-Skill-ID. Standard library only."""
 
 import datetime
+import hashlib
 import json
 import os
 import sys
@@ -312,3 +313,20 @@ def merge_config(cfg, defaults=None):
             out[new_key] = raw[old_key]
         out.pop(old_key, None)
     return out, notices
+
+
+ORDER_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
+                "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
+                "order_class", "take_profit_limit_price", "stop_loss_stop_price",
+                "stop_loss_limit_price", "advanced_instructions", "market")
+
+
+def order_fingerprint(order):
+    """Short sha256 identifying the exact order checked by trader-risk and shown by trader-broker."""
+    core = {k: order[k] for k in ORDER_FIELDS if k in order and order[k] is not None}
+    if not core.get("stop_loss_stop_price"):
+        plan = order.get("plan")
+        if isinstance(plan, dict) and plan.get("stop") is not None:
+            core["plan_stop"] = plan["stop"]
+    blob = json.dumps(core, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
