@@ -356,17 +356,13 @@ def read_config(path):
         p = market.from_config(doc)
     except ValueError as e:
         raise EntryError(str(e))
-    cfg = _profile_defaults(p)
-    cfg["market"] = p["id"]
+    base = dict(DEFAULTS, no_entries_before_break_min=0)
+    cfg, _ = market.merge_config(doc, base, p=p)
     for k in DEFAULTS:
-        if doc.get(k):
-            cfg[k] = doc[k]
-    if doc.get("no_entries_before_break_min") is not None:
-        cfg["no_entries_before_break_min"] = doc["no_entries_before_break_min"]
-    for k in DEFAULTS:
-        parse_hhmm(cfg[k], k, p=p)
+        if cfg[k] is not None:
+            parse_hhmm(cfg[k], k, p=p)
     try:
-        bmin = int(cfg["no_entries_before_break_min"])
+        bmin = int(0 if cfg["no_entries_before_break_min"] is None else cfg["no_entries_before_break_min"])
     except (TypeError, ValueError):
         raise EntryError("no_entries_before_break_min must be a whole number >= 0")
     if bmin < 0:
@@ -395,10 +391,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         prof = p or market.from_config(cfg)
     except ValueError as e:
         raise EntryError(str(e))
-    eff_cfg = _profile_defaults(prof)
-    for k, v in (cfg or {}).items():
-        if v is not None:
-            eff_cfg[k] = v
+    eff_cfg, _ = market.merge_config(cfg, dict(DEFAULTS, no_entries_before_break_min=0), p=prof)
     delay_min = int(prof.get("data_delay_min") or 0)
     sym = market.base_symbol(prof, chart["symbol"])
     if prof.get("pairs"):

@@ -544,14 +544,7 @@ def read_config(path):
         p = market.from_config(doc)
     except ValueError as e:
         raise PlanError(str(e))
-    cfg = dict(DEFAULTS)
-    for k, v in (p.get("defaults") or {}).items():
-        if k in cfg and v is not None:
-            cfg[k] = v
-    for k in DEFAULTS:
-        if doc.get(k) is not None:
-            cfg[k] = doc[k]
-    cfg["market"] = p["id"]
+    cfg, _ = market.merge_config(doc, DEFAULTS, p=p)
     return cfg
 
 

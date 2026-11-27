@@ -494,12 +494,18 @@ def yahoo_symbol(p, sym):
     return s.replace(".", "-")
 
 
-def merge_config(cfg, defaults=None):
-    """Merge user config over optional defaults, resolving *_usd aliases.
+def merge_config(cfg, defaults=None, p=None):
+    """Merge user config over optional defaults (and profile defaults if `p`), resolving *_usd aliases.
     Returns (merged_dict, notices). If both new and old keys are set, new wins."""
     raw = cfg or {}
     out = dict(defaults or {})
+    if p:
+        for k, v in (p.get("defaults") or {}).items():
+            if k in out:
+                out[k] = v
     out.update(raw)
+    if p:
+        out["market"] = p["id"]
     notices = []
     for new_key, old_key in MONEY_LIMIT_ALIASES:
         has_new = new_key in raw

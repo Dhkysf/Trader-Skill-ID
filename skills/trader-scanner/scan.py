@@ -927,15 +927,17 @@ def cmd_daily(a):
 
 def cmd_orb(a):
     t0 = time.time()
-    cfg = read_config(a.config)
-    p = market.from_config(cfg)
+    raw_cfg = read_config(a.config)
+    p = market.from_config(raw_cfg)
+    cfg, _ = market.merge_config(raw_cfg, {"no_entries_after": "15:30"}, p=p)
     prof_min_price, _ = _profile_scan_defaults(p)
     min_price = a.min_price if a.min_price is not None else prof_min_price
     min_volume = a.min_volume if a.min_volume is not None else 0
     tz = _tz_label(p)
     now = _parse_now_in(a.now, p)
     at = parse_hhmm(a.at) if a.at else None
-    until = parse_hhmm(a.until or cfg.get("no_entries_after") or "15:30", "--until")
+    until_raw = a.until if a.until is not None else cfg.get("no_entries_after")
+    until = parse_hhmm(until_raw, "--until") if until_raw else None
     data = failed = None
     explicit_day = None
     offline_syms = None

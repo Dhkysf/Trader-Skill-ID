@@ -144,15 +144,6 @@ def _px(x, p=None):
     return market.price(p or _IDX, x)
 
 
-def _defaults_for(p):
-    d = dict(DEFAULTS)
-    if p:
-        for k, v in (p.get("defaults") or {}).items():
-            if k in d and v is not None:
-                d[k] = v
-    return d
-
-
 def window_check(now_local, c):
     """Reasons an entry cannot be placed now (market local time). Empty when the window is off."""
     before = hhmm(c.get("no_entries_before"), "no_entries_before")
@@ -297,7 +288,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     price_times  {SYM: naive UTC time of that price}; None = every price counts as fresh"""
     p = market.from_config(cfg)
     disp = market.display_name(p)
-    c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
+    c, cfg_notices = market.merge_config(cfg, DEFAULTS, p=p)
     dec = market.price_decimals(p)
     out_dec = max(2, dec)
     tol = float(market.price_tol(p))

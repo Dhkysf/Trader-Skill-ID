@@ -138,19 +138,10 @@ def _place_label(p):
     return prof.get("tz_label") or prof.get("timezone") or "WIB"
 
 
-def _defaults_for(p):
-    d = dict(DEFAULTS)
-    if p:
-        for k, v in (p.get("defaults") or {}).items():
-            if k in d and v is not None:
-                d[k] = v
-    return d
-
-
 def load_config(path):
     raw = read_json(path, "config") if (path and os.path.exists(path)) else {}
     p = market.from_config(raw)
-    return market.merge_config(raw, _defaults_for(p))[0]
+    return market.merge_config(raw, DEFAULTS, p=p)[0]
 
 
 def _f(x):
@@ -308,7 +299,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     today  market date (YYYY-MM-DD); a plan for another day is refused"""
     market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "idx"
     p = market.load(market_id)
-    c, cfg_notices = market.merge_config(cfg, _defaults_for(p))
+    c, cfg_notices = market.merge_config(cfg, DEFAULTS, p=p)
     dec = market.price_decimals(p)
     out_dec = max(2, dec)
     tol = float(market.price_tol(p))
@@ -978,7 +969,7 @@ def main(argv=None):
     try:
         raw_cfg = read_json(a.config, "config") if (a.config and os.path.exists(a.config)) else {}
         p = market.from_config(raw_cfg)
-        cfg, cfg_notices = market.merge_config(raw_cfg, _defaults_for(p))
+        cfg, cfg_notices = market.merge_config(raw_cfg, DEFAULTS, p=p)
         if a.weights or a.targets:
             return run_weights(a, cfg, cfg_notices)
         if a.top or a.whole_shares or a.cents:

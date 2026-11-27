@@ -181,6 +181,22 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(s["lots"], 1)
         self.assertEqual(len(s["notices"]), 1)
 
+    def test_merge_config_keeps_capability_keys_and_profile_nulls(self):
+        fx = market.load("fx")
+        merged, _ = market.merge_config(
+            {"market": "fx", "allow_short": True, "paper": False, "blocked": ["USDJPY"], "budget": 5000},
+            {"no_entries_before": "09:15", "no_entries_after": "15:30", "flat_by": "15:45"},
+            p=fx,
+        )
+        self.assertTrue(merged["allow_short"])
+        self.assertFalse(merged["paper"])
+        self.assertEqual(merged["blocked"], ["USDJPY"])
+        self.assertEqual(merged["budget"], 5000)
+        self.assertIsNone(merged["no_entries_before"])
+        self.assertEqual(merged["no_entries_after"], "16:30")
+        self.assertEqual(merged["flat_by"], "16:45")
+        self.assertFalse(market.allows_short(market.load("idx"), {"market": "idx"}))
+
     def test_base_symbol(self):
         idx = market.load("idx")
         self.assertEqual(market.base_symbol(idx, "bbca.jk"), "BBCA")
