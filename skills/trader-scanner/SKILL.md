@@ -1,17 +1,15 @@
 ---
 name: trader-scanner
 description: >-
-  Chart Scanner. Scans thousands of charts for setups: opening-range
-  breakouts, flags, oversold bounces. Builds the list of Indonesian stocks
-  (IDX) from a local Daftar Saham CSV or watchlist,
-  runs a pre-market scan of daily closes (20-day closing-high breakout, bull
-  flag, reclaimed the 20-day average, oversold, oversold bounce) and an
-  intraday opening-range breakout scan on 5-minute bars, then writes
-  trader/watchlist.json for trader-news and trader-entry. Free Yahoo data,
-  bar by bar. Use when the user says "scan the market", "find me setups",
+  Chart Scanner for Indonesian stocks (IDX) and spot forex. Scans charts for
+  setups: opening-range breakouts (long and short on forex, long on IDX),
+  flags, and oversold bounces. Builds the IDX list from a local Daftar Saham
+  CSV or watchlist, runs a pre-market daily close scan and an intraday ORB scan
+  on 5-minute bars, then writes trader/watchlist.json for trader-news and
+  trader-entry. Use when the user says "scan the market", "find me setups",
   "what is breaking out", "opening range breakouts", "scan for bull flags",
-  "oversold stocks", "pre-market scan", "build my watchlist", "what should I
-  look at today", or at the start of a trading day before /trader-news.
+  "oversold stocks", "scan saham", "cari setup", "saham breakout", "scan forex",
+  or at the start of a trading day before /trader-news.
 argument-hint: "[universe | daily | orb] [--at HH:MM]"
 ---
 
@@ -32,6 +30,7 @@ python "<skill-dir>/scan.py" daily                          # before the open ->
 python "<skill-dir>/scan.py" daily --symbols BBCA,BBRI,BMRI  # or --watchlist FILE, --limit 200
 python "<skill-dir>/scan.py" orb                            # after 09:20 WIB -> trader/watchlist.json
 python "<skill-dir>/scan.py" orb --at 09:35                 # cut the clock at 09:35 WIB
+python "<skill-dir>/scan.py" orb --session london            # forex London open ORB
 python "<skill-dir>/scan.py" orb --watchlist trader/watchlist.json --json
 ```
 

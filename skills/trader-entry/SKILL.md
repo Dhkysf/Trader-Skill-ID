@@ -1,18 +1,15 @@
 ---
 name: trader-entry
 description: >-
-  Entry Timer. Watches a setup bar by bar and tells you the moment to get in.
-  Reads free Yahoo 1-minute or 5-minute bars, builds the opening range (the
-  first 15 minutes by default) and calls the entry on the first completed bar
-  that CLOSES above the range high, or above a level you give it (like a
-  20-day high from the scanner), with an optional volume check. Says waiting
-  and how far, triggered with the time and the price, expired, or not open
-  yet, and writes trader/entry.json for /trader-exit. Long side only. It never
-  places an order. Use when the user says "tell me when to get in", "watch
-  BBCA", "has it broken out", "did it break the opening range", "entry
-  signal", "time my entry", "check my watchlist", or after /trader-scanner
-  and /trader-news, before /trader-exit.
-argument-hint: "[TICKER] [--setup orb|level] [--interval 5m|1m]"
+  Entry Timer for Indonesian stocks (IDX, long only) and spot forex (long and
+  short). Watches a setup bar by bar on free Yahoo 1-minute or 5-minute bars
+  and calls the entry on the first completed bar that CLOSES past the opening
+  range or a given level, with an optional volume check. Writes trader/entry.json
+  for /trader-exit. Never places an order. Use when the user says "tell me when
+  to get in", "watch BBCA", "has it broken out", "entry signal", "time my
+  entry", "kapan masuk", "pantau BBCA", "sinyal entry", "sudah breakout", or
+  after /trader-scanner and /trader-news, before /trader-exit.
+argument-hint: "[TICKER] [--setup orb|level] [--interval 5m|1m] [--side buy|sell]"
 ---
 
 # trader-entry
@@ -32,6 +29,7 @@ python "<skill-dir>/entry.py" check BBCA --write          # also save trader/ent
 python "<skill-dir>/entry.py" check BBCA --setup level --level 9900
 python "<skill-dir>/entry.py" check BBCA --interval 1m --min-volume-x 1.5
 python "<skill-dir>/entry.py" watch BBCA --until 15:30    # one line per closed bar, stops on the trigger
+python "<skill-dir>/entry.py" check EURUSD --side sell --session london
 python "<skill-dir>/entry.py" watchlist                   # every hit in trader/watchlist.json
 ```
 
@@ -121,7 +119,7 @@ and the trigger moves to 09:55 WIB at 5575 (the 09:50 bar, 7.98x).
   and can lag. Say so when a minute matters.
 - A signal is information, not an order, and not a promise. Nothing here
   promises winning trades or money.
-- Long side only. v2 plans longs only. If the user wants a short, say that.
+- IDX is long-only; forex supports `--side sell` (short) when `"allow_short": true` and `--session london|newyork`.
 - One trigger per setup per day: the first close above. Later closes do not
   reset it.
 - Never call an entry early because a bar looks like it will close above.

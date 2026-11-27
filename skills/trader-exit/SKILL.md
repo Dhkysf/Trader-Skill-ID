@@ -1,16 +1,14 @@
 ---
 name: trader-exit
 description: >-
-  Exit Planner. Sets your stop and your target before you enter, so you know
-  when to get out. Reads the entry from trader-entry (or a price you give),
-  puts the stop at the opening-range midpoint by default (or the range low,
-  your price, a percent, or a multiple of the ATR), rounds it down to a
-  valid IDX tick, and sets the target at 2R (or 1R, or your price). Refuses a stop at or
-  above the entry, a target at or below it, or a stop too tight to survive the
-  spread, and says why. Writes trader/plan.json for the Time Machine, the
-  Budget Manager and Price Alerts. Long side only. Use when the user says
-  "where's my stop", "set my stop and target", "plan the exit", "when do I get
-  out", "stop loss", "what's my R", "risk reward", or right after
+  Exit Planner for Indonesian stocks (IDX, long only) and spot forex (long and
+  short, in pips). Sets your stop and target before you enter from
+  trader-entry or a price you give, using opening-range midpoint/low/high,
+  your price, percent, or ATR, rounded to a valid tick/pip, and sets target
+  at 2R (or 1R, or your price). Writes trader/plan.json for Time Machine,
+  Budget Manager, and Price Alerts. Use when the user says "where's my stop",
+  "set my stop and target", "plan the exit", "stop loss", "what's my R",
+  "rencana keluar", "pasang stop dan target", "hitung R", or right after
   /trader-entry triggers, before /trader-timemachine.
 argument-hint: "[--stop or-mid|or-low|price:X|pct:X|atr:K] [--target 2R|1R|price:X]"
 ---
@@ -63,10 +61,10 @@ A level setup has no opening range to lean on, so it needs a stop you name.
   for a long). Risk = entry minus stop. Target = entry + R x risk, rounded
   half up to a valid IDX tick. `2R` by default; `1R`, `1.5R` or `price:X` also
   work.
-- **Refused, with the reason.** A stop at or above the entry. A target at or
-  below it. A risk under 0.05% of the price: too tight to survive the
+- **Refused, with the reason.** A stop on the wrong side of the entry. A target
+  on the wrong side. A risk under 0.05% of the price: too tight to survive the
   spread, normal wiggle would stop you out. An entry.json that has not
-  triggered (unless you give `--entry`). A short: v2 plans longs only.
+  triggered (unless you give `--entry`). A short on IDX (forex supports `--side sell` when `"allow_short": true`).
 - **Flat by.** 15:45 WIB by default (or `flat_by` in the config). Out by then,
   win or lose, no overnight hold. An entry at or after the flat-by time is
   refused.
@@ -113,7 +111,7 @@ sizes it in 100-share lots within your max loss per trade.
   never prints a P&L or a return.
 - Nothing here promises winning trades or money. A 1R target is not a
   prediction that the price gets there.
-- Long side only. v2 plans longs only.
+- IDX is long-only; forex supports `--side sell` (short) when `"allow_short": true`.
 
 ## What it never does
 

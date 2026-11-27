@@ -1,12 +1,13 @@
 ---
 name: trader-broker
 description: >
-  Build manual order tickets for Indonesian (IDX) stocks, record your explicit
-  "yes" confirmation, and log paper or manual fills in trader/state/broker.json.
-  Reads trader/orders.json and requires a matching PASS from trader-risk in
-  trader/state/risk.json before showing any ticket. Use when the user says
-  "build ticket", "fill", "close my position", "flatten", or "get me out".
-  Not financial advice.
+  Build manual order tickets for Indonesian stocks (IDX) and spot forex,
+  record your explicit "yes" confirmation, and log paper or manual fills in
+  trader/state/broker.json. Reads trader/orders.json and requires a matching
+  PASS from trader-risk in trader/state/risk.json before showing any ticket.
+  Use when the user says "build ticket", "fill", "close my position",
+  "flatten", "get me out", "buat tiket", "catat fill", "tutup posisi", or
+  "konfirmasi order". Not financial advice.
 argument-hint: "[order number]"
 ---
 

@@ -1,18 +1,15 @@
 ---
 name: trader-timemachine
 description: >-
-  Time Machine. Replays every possible outcome of a trade before you risk any
-  money: 10,000 simulated sessions plus every past time the setup fired.
-  Takes the plan from trader-exit (entry, stop, target), rebuilds the rest of
-  the day 10,000 times from the stock's own 5-minute bars over the last 60
-  days, and re-runs the same rule on every past session. Prints the odds of
-  target first, stop first, or neither by the close, where the price sits at
-  the close, the average R, the history, and one honest verdict, then hands
-  off to /trader-budget. Use when the user says "run the time machine",
-  "replay this trade", "what are the odds", "simulate this trade", "monte
-  carlo", "backtest this setup", "how often does this hit the target", "is
-  this a coin flip", or after /trader-exit writes a plan, before
-  /trader-budget.
+  Time Machine for Indonesian stocks (IDX) and spot forex (24/5). Replays
+  every possible outcome of a trade before you risk any money: 10,000 simulated
+  sessions plus every past time the setup fired from the last 60 days of
+  5-minute bars. Prints the odds of target first, stop first, or neither by
+  flat-by/close, average R, history, and verdict, then hands off to
+  /trader-budget. Use when the user says "run the time machine", "replay this
+  trade", "what are the odds", "simulate this trade", "monte carlo", "backtest
+  this setup", "simulasi trade", "uji peluang", "replay trade", or after
+  /trader-exit writes a plan, before /trader-budget.
 argument-hint: "[path to plan.json, or TICKER]"
 ---
 
@@ -172,7 +169,8 @@ that carries `"market": "idx"`.
   valid IDX ticks, and runs that touch the band edge are counted.
 - **Delay and minimum sessions:** Yahoo `.JK` data is about 10 minutes late.
   Fewer than 20 full sessions means no verdict.
-- **Out of scope:** budget/risk/broker, short trades, forex.
+- **Forex (`"market": "fx"`):** 24/5 NY rollover sessions (288 five-minute bars
+  per day), no lunch gap or ARA/ARB clamping, supports both long and short.
 
 ## Safety
 

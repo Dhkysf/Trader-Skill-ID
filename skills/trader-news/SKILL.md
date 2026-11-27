@@ -1,14 +1,14 @@
 ---
 name: trader-news
 description: >-
-  News Monitor. Tracks breaking news on every stock you watch and flags what
-  moves it: Yahoo Finance headlines per ticker, Indonesian financial RSS feeds, and how
-  far each stock is from yesterday's close. Shows only what is new since the
-  last check, newest first, in WIB, tags each item (earnings,
-  analyst, deal, halt, regulatory, macro...) and never repeats one. Use when
-  the user says "any news on BBCA", "why is this moving", "what's the news on
-  my watchlist", "morning briefing", "pre-market news", "monitor the news",
-  "did anything break", or after /trader-scanner finds setups.
+  News Monitor for Indonesian stocks (IDX) and forex price moves. Tracks
+  breaking news on every ticker you watch: Indonesian financial RSS feeds,
+  Yahoo Finance headlines, and how far each ticker is from yesterday's close.
+  Shows only what is new since the last check, newest first, in local market
+  time (WIB for IDX), tags each item and never repeats one. Use when the user
+  says "any news on BBCA", "why is this moving", "what's the news on my
+  watchlist", "morning briefing", "berita saham", "kenapa saham ini gerak",
+  "berita watchlist", "pantau berita", or after /trader-scanner finds setups.
 argument-hint: "[tickers]"
 ---
 

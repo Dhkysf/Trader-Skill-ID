@@ -1,17 +1,14 @@
 ---
 name: trader-alerts
 description: >-
-  Price Alerts. Rings when a price, a stop or the opening bell hits. Turns
-  the trade plan into three alerts in one go (the stop, the target and "flat
-  by close" at your flat-by time), plus above / below / stop / target levels,
-  percent moves from the previous close, any time of day, and the IDX
-  opening bell, each ringing once so you are not spammed. Knows IDX hours
-  and 2026 holidays, works out WIB itself, fetches free delayed quotes
-  (Yahoo chart JSON) one ticker at a time, and writes trader/prices.json for sizing and the
-  risk check. Use when the user says "alert me when", "tell me if BBCA hits",
-  "watch my stop", "watch my trade", "remind me to close by 15:45", "is the
-  market open", "when does the market open", "get me a price", or right
-  after /trader-exit writes a plan.
+  Price Alerts for Indonesian stocks (IDX) and spot forex. Rings when a price,
+  stop, target, percent move, flat-by time, or opening bell hits. Turns
+  trader/plan.json into three alerts in one go, knows IDX hours and 2026
+  holidays plus 24/5 forex hours, fetches free Yahoo quotes, and writes
+  trader/prices.json for sizing and risk checks. Use when the user says
+  "alert me when", "tell me if BBCA hits", "watch my stop", "is the market
+  open", "pasang alert", "ingatkan saya", "apakah bursa buka", or right after
+  /trader-exit writes a plan.
 argument-hint: "[ticker] [price]"
 ---
 

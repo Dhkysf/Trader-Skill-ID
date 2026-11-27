@@ -1,17 +1,13 @@
 ---
 name: trader-budget
 description: >-
-  Budget Manager. Sizes every position to your budget and your max loss per
-  trade. Reads the trade plan from trader-exit (entry, stop, target), finds
-  the whole shares that fit inside four limits (max loss per trade, position
-  cap, max order, cash after your buffer), says which limit decided it, and
-  writes ONE bracket order (entry, stop-loss, take-profit) to
-  `trader/orders.json` in a clean manual-ticket shape. A stop
-  too far away for your max loss is a plain refusal, not a smaller order.
-  Nothing is placed. Use when the user says "how many shares", "size this
-  trade", "how much should I buy", "I have Rp 10,000,000", "I only want to risk Rp 100,000
-  a trade", "set my rules", "keep 10% in cash", or after /trader-exit writes
-  a plan.
+  Budget Manager for Indonesian stocks (IDX, 100-share lots) and spot forex
+  (0.01 lot step, leverage, spread). Sizes every position to your budget and
+  max loss per trade from trader-exit's plan and writes ONE manual bracket
+  order to `trader/orders.json`. Nothing is placed. Use when the user says
+  "how many shares", "how many lots", "size this trade", "I have Rp
+  10,000,000", "hitung lot", "berapa lot", "atur modal", or after
+  /trader-exit writes a plan.
 argument-hint: "[budget in rupiah]"
 ---
 
@@ -153,6 +149,12 @@ When `"market": "idx"` is set in `trader/config.json`:
   overridable via `buy_fee_pct` / `sell_fee_pct` in `trader/config.json`).
 - Amounts are printed in Rupiah (`Rp 9.875.000`). Orders are manual (no
   broker API).
+
+## Forex (24/5 spot)
+
+When `"market": "fx"` is set in `trader/config.json` (see `config.fx.example.json`):
+
+- Sizes in 0.01-lot steps from `max_loss_per_trade` (including spread), `max_lots`, and `max_leverage` (use `--usdidr` or `trader/prices.json` for IDR accounts).
 
 ## Safety
 

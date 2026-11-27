@@ -2,9 +2,11 @@
 name: trader-core
 description: >-
   Shared market profiles, trading calendars, DST clock conversions, and tick
-  rounding for all Trader-Skill-ID skills. Reads the selected market profile
-  (default "idx") from JSON data files under markets/ so IDX and future profiles
-  like forex share one clock and session layer without duplicating rules.
+  rounding for all Trader-Skill-ID skills. Supports Indonesian stocks (IDX)
+  and spot forex (24/5) from JSON data files under markets/ so both markets
+  share one clock and session layer without duplicating rules. Use when the
+  user asks about "market rules", "trading hours", "market holidays", "tick
+  size", "aturan bursa", "jam bursa", "profil pasar", or "hari libur bursa".
 ---
 
 # trader-core
@@ -30,8 +32,7 @@ active market profile. When omitted or empty, it defaults to `"idx"`.
 | profile | market | timezone | currency | status |
 | --- | --- | --- | --- | --- |
 | `idx` | Indonesia Stock Exchange (IDX/BEI) | `asia_jakarta` (UTC+7, WIB) | `IDR` | active |
-
-Planned profiles: `forex`.
+| `fx` | Spot Forex (24/5 NY rollover) | `america_new_york` (ET) | quote / `IDR` | active |
 
 ## How other skills import it
 
