@@ -157,6 +157,8 @@ def slot_map(p, day):
         c_t = datetime.time.fromisoformat(c_str)
         o_min = o_t.hour * 60 + o_t.minute
         c_min = c_t.hour * 60 + c_t.minute
+        if c_min <= o_min:
+            c_min += 1440
         start_idx = len(slots)
         if s_idx > 0:
             s2_starts.add(start_idx)

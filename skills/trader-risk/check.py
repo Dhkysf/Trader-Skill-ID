@@ -168,25 +168,26 @@ def window_check(now_local, c):
     if cal_note:
         warns.append(cal_note)
     stamp = now_local.strftime("%a %Y-%m-%d %H:%M")
-    if not market.is_trading_day(p, d):
+    if not market.is_trading_day(p, d) and not market.in_session(p, now_local):
         name = holidays.get(d.isoformat())
         why = ("%s holiday: %s" % (p.get("exchange", "IDX"), name)) if name else "weekend"
         return ["window: the market is closed today (%s, %s %s)" % (why, stamp, tz)], warns
     sess = market.sessions(p, d)
+    windows = market.session_windows(p, d)
     pre = p.get("pre_closing")
     if pre and len(pre) == 2:
         pre_o, pre_c = market._parse_hm(pre[0]), market._parse_hm(pre[1])
         if pre_o <= now_local.time() < pre_c:
             return ["window: pre-closing (%s-%s %s, it is %s): no new entries"
                     % (pre[0], pre[1], tz, t.strftime("%H:%M"))], warns
-    if t < sess[0][0] or now_local.time() >= sess[-1][1]:
-        span = ", ".join("%s-%s" % (a.strftime("%H:%M"), b.strftime("%H:%M")) for a, b in sess)
-        return ["window: the market is closed (%s %s; sessions %s)" % (stamp, tz, span)], warns
-    for k in range(len(sess) - 1):
-        b_start, b_end = sess[k][1], sess[k + 1][0]
-        if b_start <= now_local.time() < b_end:
+    for k in range(len(windows) - 1):
+        b_start, b_end = windows[k][1], windows[k + 1][0]
+        if b_start <= now_local < b_end:
             return ["window: lunch break (%s-%s %s, it is %s): no new entries"
                     % (b_start.strftime("%H:%M"), b_end.strftime("%H:%M"), tz, t.strftime("%H:%M"))], warns
+    if not market.in_session(p, now_local):
+        span = ", ".join("%s-%s" % (a.strftime("%H:%M"), b.strftime("%H:%M")) for a, b in sess)
+        return ["window: the market is closed (%s %s; sessions %s)" % (stamp, tz, span)], warns
     pre_break = int(c.get("no_entries_before_break_min") or 0)
     if pre_break > 0:
         for k in range(len(sess) - 1):

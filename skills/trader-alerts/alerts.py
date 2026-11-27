@@ -110,32 +110,40 @@ def market_status(now_utc, p=None):
           "open": False, "reason": reason, "early_close": early_dates.get(d.isoformat()),
           "market": p["id"]}
     sess = market.sessions(p, d)
+    windows = market.session_windows(p, d)
+    prev_windows = market.session_windows(p, d - datetime.timedelta(days=1))
     pre_closing = p.get("pre_closing")
     pc_start = datetime.time.fromisoformat(pre_closing[0]) if pre_closing else None
     pc_end = datetime.time.fromisoformat(pre_closing[1]) if pre_closing else None
-    if not sess:
-        st["status"] = "closed"
-    else:
+    carry = next((idx for idx, (so, sc) in enumerate(prev_windows, 1) if so <= local < sc), None)
+    if sess:
         st["opens"] = sess[0][0].strftime("%H:%M")
         st["closes"] = sess[-1][1].strftime("%H:%M")
         st["sessions"] = [[o.strftime("%H:%M"), c.strftime("%H:%M")] for o, c in sess]
+    if carry is not None:
+        st["status"] = "session %d" % carry
+        st["open"] = True
+        st["reason"] = "session %d" % carry
+    elif not sess:
+        st["status"] = "closed"
+    else:
         t = local.time()
-        if t < sess[0][0]:
+        if local < windows[0][0]:
             st["status"] = "pre-open"
             st["reason"] = "pre-open"
             st["next_open"] = "%s %s" % (d.isoformat(), st["opens"])
         else:
-            for idx, (o, c) in enumerate(sess, 1):
-                if o <= t < c:
+            for idx, (so, sc) in enumerate(windows, 1):
+                if so <= local < sc:
                     st["status"] = "session %d" % idx
                     st["open"] = True
                     st["reason"] = "session %d" % idx
                     break
-                if idx < len(sess) and c <= t < sess[idx][0]:
-                    brk = "lunch break" if len(sess) == 2 else "session break"
+                if idx < len(windows) and sc <= local < windows[idx][0]:
+                    brk = "lunch break" if len(windows) == 2 else "session break"
                     st["status"] = brk
                     st["reason"] = brk
-                    st["next_open"] = "%s %s" % (d.isoformat(), sess[idx][0].strftime("%H:%M"))
+                    st["next_open"] = "%s %s" % (d.isoformat(), windows[idx][0].strftime("%H:%M"))
                     break
             else:
                 if pre_closing and pc_start <= t < pc_end:

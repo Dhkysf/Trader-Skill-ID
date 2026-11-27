@@ -393,6 +393,31 @@ class CapabilitiesTest(unittest.TestCase):
         self.assertIn("10 shares", txt)
         self.assertNotIn("lots", txt)
 
+    def test_overnight_and_24h_sessions(self):
+        overnight = {
+            "id": "night", "display_name": "NIGHT", "utc_offset_std": 0, "utc_offset_dst": 0,
+            "sessions": {"mon": [["22:00", "06:00"]]}, "holidays": {},
+        }
+        mon = datetime.date(2026, 11, 23)
+        self.assertEqual(
+            market.session_windows(overnight, mon),
+            [(datetime.datetime(2026, 11, 23, 22, 0), datetime.datetime(2026, 11, 24, 6, 0))],
+        )
+        self.assertTrue(market.in_session(overnight, datetime.datetime(2026, 11, 23, 23, 30)))
+        self.assertTrue(market.in_session(overnight, datetime.datetime(2026, 11, 24, 5, 0)))
+        self.assertFalse(market.in_session(overnight, datetime.datetime(2026, 11, 24, 6, 0)))
+        self.assertFalse(market.in_session(overnight, datetime.datetime(2026, 11, 23, 21, 59)))
+        self.assertFalse(market.in_session(overnight, datetime.datetime(2026, 11, 24, 12, 0)))
+
+        self.assertTrue(alerts.market_status(datetime.datetime(2026, 11, 23, 23, 30), p=overnight)["open"])
+        self.assertTrue(alerts.market_status(datetime.datetime(2026, 11, 24, 5, 0), p=overnight)["open"])
+        self.assertFalse(alerts.market_status(datetime.datetime(2026, 11, 24, 12, 0), p=overnight)["open"])
+
+        fx = self._use_fx_profile()
+        self.assertTrue(market.in_session(fx, datetime.datetime(2026, 11, 23, 0, 0)))
+        self.assertTrue(market.in_session(fx, datetime.datetime(2026, 11, 23, 12, 0)))
+        self.assertTrue(market.in_session(fx, datetime.datetime(2026, 11, 23, 23, 59)))
+
 
 if __name__ == "__main__":
     unittest.main()

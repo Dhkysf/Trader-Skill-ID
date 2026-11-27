@@ -134,8 +134,30 @@ def sessions(p, d):
     early = p.get("early_close") or {}
     if d.isoformat() in early.get("dates", {}):
         cut = _parse_hm(early["time"])
-        out = [(o, min(c, cut)) for o, c in out if o < cut]
+        out = [(o, cut if c <= o else min(c, cut)) for o, c in out if o < cut]
     return out
+
+
+def session_windows(p, d):
+    """List of (start_dt, end_dt) naive local datetimes for sessions starting on `d`.
+    A session with close <= open ends on d + 1 day (overnight or 24-hour session)."""
+    d = _as_date(d)
+    out = []
+    for o, c in sessions(p, d):
+        start = datetime.datetime.combine(d, o)
+        end_d = d + datetime.timedelta(days=1) if c <= o else d
+        out.append((start, datetime.datetime.combine(end_d, c)))
+    return out
+
+
+def in_session(p, local_dt):
+    """True if naive local datetime `local_dt` falls inside any session (including prior-day overnight)."""
+    d = local_dt.date()
+    for day in (d - datetime.timedelta(days=1), d):
+        for so, sc in session_windows(p, day):
+            if so <= local_dt < sc:
+                return True
+    return False
 
 
 def _to_decimal(price):
