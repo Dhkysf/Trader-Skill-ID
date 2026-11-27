@@ -89,8 +89,8 @@ def _tz_label(p):
     return prof.get("tz_label") or prof.get("timezone") or "WIB"
 
 
-def _money(x, p=None):
-    return market.price(p or _IDX, x)
+def _money(x, p=None, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
 
 
 def market_status(now_utc, p=None):
@@ -124,6 +124,10 @@ def market_status(now_utc, p=None):
         st["status"] = "session %d" % carry
         st["open"] = True
         st["reason"] = "session %d" % carry
+        if "opens" not in st:
+            prev_so, prev_sc = prev_windows[carry - 1]
+            st["opens"] = prev_so.strftime("%H:%M")
+            st["closes"] = prev_sc.strftime("%H:%M")
     elif not sess:
         st["status"] = "closed"
     else:
@@ -263,6 +267,11 @@ def get_quotes(symbols, source="yahoo", offline=None, pause=PAUSE, p=None):
     quotes, errors = {}, []
     for i, sym in enumerate(symbols):
         sym = market.base_symbol(prof, sym)
+        if prof.get("pairs"):
+            try:
+                market.require_pair(prof, sym)
+            except ValueError as e:
+                raise AlertError(str(e))
         try:
             if offline:
                 text = _offline_text(offline, source, sym, p=prof)
@@ -420,6 +429,11 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
                 rung[rid] = stamp
             continue
         sym = market.base_symbol(prof, r["symbol"])
+        if prof.get("pairs"):
+            try:
+                market.require_pair(prof, sym)
+            except ValueError as e:
+                raise AlertError(str(e))
         q = quotes.get(sym)
         if not q:
             continue
@@ -429,9 +443,9 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
             if hit and rid not in rung:
                 word = "at or above" if typ == "above" else "at or below"
                 label = {"stop": "stop", "target": "target"}.get(r["type"], "alert level")
-                lvl_s = market.price(prof, r["price"])
+                lvl_s = market.price(prof, r["price"], symbol=sym)
                 rings.append({"id": rid, "symbol": sym, "message": "%s %s %s: %s your %s %s%s."
-                              % (sym, "is" if status["open"] else "last", _money(px, prof), word, label, lvl_s,
+                              % (sym, "is" if status["open"] else "last", _money(px, prof, symbol=sym), word, label, lvl_s,
                                  (" (" + r["note"] + ")") if r.get("note") else "")})
                 rung[rid] = stamp
             elif not hit and rid in rung and r.get("rearm"):
@@ -445,7 +459,7 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
             hit = abs(move) >= r["pct"] and (not want or (want == "up") == (move > 0))
             if hit and not _rang_today(rung.get(rid), today, p=prof):
                 rings.append({"id": rid, "symbol": sym, "message": "%s moved %+.2f%% to %s (from %s)."
-                              % (sym, move, _money(px, prof), _money(float(ref), prof))})
+                              % (sym, move, _money(px, prof, symbol=sym), _money(float(ref), prof, symbol=sym))})
                 rung[rid] = stamp
     state["last_check"] = stamp
     return rings, state
@@ -464,7 +478,10 @@ def rules_from_plan(plan, cfg_flat_by=None, p=None):
     default_flat = (prof.get("defaults") or {}).get("flat_by") or "15:45"
     sym = market.base_symbol(prof, plan["symbol"])
     out = []
-    for key, typ, word in (("stop", "stop", "plan stop"), ("target", "target", "plan target")):
+    is_short = str(plan.get("side") or "buy").lower() in ("sell", "short")
+    pairs = (("stop", "above" if is_short else "stop", "plan stop"),
+             ("target", "below" if is_short else "target", "plan target"))
+    for key, typ, word in pairs:
         v = plan.get(key)
         if not isinstance(v, (int, float)) or v <= 0:
             raise AlertError("the plan has no %s (run trader-exit)" % key)
@@ -546,8 +563,8 @@ def cmd_quote(a):
                 chg = ""
                 if q.get("prev_close"):
                     chg = " (%+.2f%% vs prev close %s)" % (100.0 * (q["price"] / q["prev_close"] - 1),
-                                                           _money(q["prev_close"], p))
-                print("%-6s %s%s  %s  [%s]" % (s, _money(q["price"], p), chg, q.get("time", ""), q["source"]))
+                                                           _money(q["prev_close"], p, symbol=s))
+                print("%-6s %s%s  %s  [%s]" % (s, _money(q["price"], p, symbol=s), chg, q.get("time", ""), q["source"]))
         for e in errors:
             print("error: " + e)
         if a.write and quotes:
@@ -585,7 +602,7 @@ def cmd_check(a):
             print("ALERT " + r["message"])
         if not rings:
             print("Nothing hit. %d rule(s) watched today%s." % (
-                len(watched), (", " + ", ".join("%s %s" % (s, _money(quotes[s]["price"], p))
+                len(watched), (", " + ", ".join("%s %s" % (s, _money(quotes[s]["price"], p, symbol=s))
                                                for s in syms if s in quotes))
                 if quotes else ""))
         for e in errors:
@@ -639,6 +656,11 @@ def cmd_add(a):
         if not a.symbol:
             raise AlertError("--symbol is required (or --from-plan, --at, --opening-bell)")
         sym = market.base_symbol(p, a.symbol)
+        if p.get("pairs"):
+            try:
+                market.require_pair(p, sym)
+            except ValueError as e:
+                raise AlertError(str(e))
         if a.above is not None:
             rule = {"type": "above", "price": a.above}
         elif a.below is not None:
