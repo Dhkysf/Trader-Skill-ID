@@ -144,8 +144,8 @@ def _delay_line(p):
     return None
 
 
-def _fmt_price(x, p=None):
-    return market.price(p or _IDX, x)
+def _fmt_price(x, p=None, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
 
 
 def trading_day(d, p=None):
@@ -496,7 +496,8 @@ def scan_daily(data, symbols, now_utc, min_price, min_volume, min_value=0, p=Non
         closes = [c for _, c in bars]
         tags, nums = find_setups(closes)
         if tags:
-            hits.append({"symbol": sym, "setups": tags, "price": round(closes[-1], 2),
+            pdec = market.price_decimals(p, sym) if (p and p.get("pairs")) else 2
+            hits.append({"symbol": sym, "setups": tags, "price": round(closes[-1], pdec),
                          "close_date": d_last.isoformat(), "rsi": round(nums["rsi"], 1),
                          "volume": int(vol) if vol is not None else None})
     hits.sort(key=lambda h: (-(h["price"] * (h["volume"] or 0)), h["symbol"]))  # most dollars traded first
@@ -507,26 +508,35 @@ def scan_daily(data, symbols, now_utc, min_price, min_volume, min_value=0, p=Non
 
 # ---------------------------------------------------------------- opening-range breakout
 
-def expected_slots(day, cutoff, p=None):
+def _orb_windows(prof, day, session_name=None):
+    if session_name and prof.get("orb_sessions"):
+        open_dt = market.orb_session_open(prof, session_name, day)
+        tw = market.trading_day_window(prof, day)
+        close_dt = tw[-1][1] if tw else datetime.datetime.combine(day, datetime.time(17, 0))
+        return [(open_dt, close_dt)]
+    return market.trading_day_window(prof, day)
+
+
+def expected_slots(day, cutoff, p=None, session_name=None):
     """Expected 5-minute bar start datetimes on `day` up to `cutoff`, across all continuous sessions."""
     prof = p or _IDX
-    sess = market.sessions(prof, day)
+    windows = _orb_windows(prof, day, session_name=session_name)
     step = datetime.timedelta(minutes=BAR_MIN)
     out = []
-    for o, c in sess:
-        end_dt = min(datetime.datetime.combine(day, c), cutoff)
-        cur = datetime.datetime.combine(day, o)
+    for so, sc in windows:
+        end_dt = min(sc, cutoff)
+        cur = so
         while cur + step <= end_dt:
             out.append(cur)
             cur += step
     return out
 
 
-def session_bars(series, day, cutoff, p=None):
+def session_bars(series, day, cutoff, p=None, session_name=None):
     """5-minute bars of `day` that are complete at `cutoff` (naive local time),
     on the grid, with a close. Sorted, one per slot."""
     prof = p or _IDX
-    sess = market.sessions(prof, day)
+    windows = _orb_windows(prof, day, session_name=session_name)
     out = {}
     hs, ls = series.get("h"), series.get("l")
     for i, ts in enumerate(series["t"]):
@@ -534,10 +544,10 @@ def session_bars(series, day, cutoff, p=None):
         if c is None:
             continue
         lt = ts_to_local(ts, prof)
-        if lt.date() != day or lt.second or lt.minute % BAR_MIN:
-            continue  # another day, or the live tick off the grid
-        if not any(o <= lt.time() < cl for o, cl in sess):
-            continue  # pre-market, lunch break, after hours, or closing auction
+        if lt.second or lt.minute % BAR_MIN:
+            continue  # live tick off the grid
+        if not any(so <= lt < sc for so, sc in windows):
+            continue  # outside session window
         if lt + datetime.timedelta(minutes=BAR_MIN) > cutoff:
             continue  # still in progress at the cutoff
         v = series.get("v")
@@ -548,23 +558,28 @@ def session_bars(series, day, cutoff, p=None):
     return [out[k] for k in sorted(out)]
 
 
-def usable(bars, day, cutoff, n_range, p=None):
+def usable(bars, day, cutoff, n_range, p=None, session_name=None):
     """Every expected session slot up to the cutoff is there, and at least the range."""
-    want = expected_slots(day, cutoff, p=p)
+    want = expected_slots(day, cutoff, p=p, session_name=session_name)
     if len(want) < n_range or len(bars) != len(want):
         return False
     return all(b["start"] == w for b, w in zip(bars, want))
 
 
-def orb_candidate(bars, n_range):
+def orb_candidate(bars, n_range, allow_short=False):
     """Stage 1, closes only: some completed bar after the range closed at or above
-    the highest close of the range. Necessary for a breakout (range high >= any range close)."""
+    the highest close of the range (or at/below lowest close if allow_short)."""
     top = max(b["c"] for b in bars[:n_range])
-    return any(b["c"] >= top for b in bars[n_range:])
+    if any(b["c"] >= top for b in bars[n_range:]):
+        return True
+    if allow_short:
+        bot = min(b["c"] for b in bars[:n_range])
+        return any(b["c"] <= bot for b in bars[n_range:])
+    return False
 
 
-def orb_hit(bars, n_range):
-    """Stage 2, real highs and lows: the first completed bar to CLOSE above the range high."""
+def orb_hit(bars, n_range, allow_short=False, dec=2):
+    """Stage 2, real highs and lows: the first completed bar to CLOSE beyond the opening range."""
     rng = bars[:n_range]
     if any(b["h"] is None or b["l"] is None for b in rng):
         return None
@@ -574,14 +589,23 @@ def orb_hit(bars, n_range):
         b = bars[k]
         if b["c"] > oh:
             closes_at = b["start"] + datetime.timedelta(minutes=BAR_MIN)
-            return {"price": round(b["c"], 2), "at": clock_label(closes_at),
+            hit = {"price": round(b["c"], dec), "at": clock_label(closes_at),
+                   "bar_start": b["start"].strftime("%H:%M"), "bar_index": k,
+                   "or_high": round(oh, dec), "or_low": round(ol, dec),
+                   "pct_over": round((b["c"] / oh - 1) * 100, 2), "_t": closes_at}
+            if allow_short:
+                hit["side"] = "buy"
+            return hit
+        if allow_short and b["c"] < ol:
+            closes_at = b["start"] + datetime.timedelta(minutes=BAR_MIN)
+            return {"side": "sell", "price": round(b["c"], dec), "at": clock_label(closes_at),
                     "bar_start": b["start"].strftime("%H:%M"), "bar_index": k,
-                    "or_high": round(oh, 2), "or_low": round(ol, 2),
-                    "pct_over": round((b["c"] / oh - 1) * 100, 2), "_t": closes_at}
+                    "or_high": round(oh, dec), "or_low": round(ol, dec),
+                    "pct_over": round((1 - b["c"] / ol) * 100, 2), "_t": closes_at}
     return None
 
 
-def orb_window(now_utc, at, or_minutes, until, explicit_day=None, p=None):
+def orb_window(now_utc, at, or_minutes, until, explicit_day=None, p=None, session_name=None):
     """-> (day, cutoff naive local) or raise ScanError with the plain message."""
     prof = p or _IDX
     tz = _tz_label(prof)
@@ -589,16 +613,15 @@ def orb_window(now_utc, at, or_minutes, until, explicit_day=None, p=None):
     day = explicit_day or now.date()
     if or_minutes < BAR_MIN or or_minutes % BAR_MIN or or_minutes > 120:
         raise ScanError("--or-minutes wants a multiple of 5 from 5 to 120 (15 is the classic)")
-    ok, why = trading_day(day, prof)
-    if not ok:
+    windows = _orb_windows(prof, day, session_name=session_name)
+    if not windows:
+        ok, why = trading_day(day, prof)
         raise ScanError("No session on %s (%s): the market is closed. Run orb on a trading day "
                         "after the opening range, or replay a past day with --offline." % (day_label(day), why))
-    sess = market.sessions(prof, day)
-    open_t, close_t = sess[0][0], sess[-1][1]
-    open_dt = datetime.datetime.combine(day, open_t)
+    open_dt, close_dt = windows[0][0], windows[-1][1]
+    open_t = open_dt.time()
     range_end = open_dt + datetime.timedelta(minutes=or_minutes)
     first_close = range_end + datetime.timedelta(minutes=BAR_MIN)
-    close_dt = datetime.datetime.combine(day, close_t)
     if at is not None:
         cutoff = datetime.datetime.combine(day, at)
         if explicit_day is None and cutoff > now + datetime.timedelta(seconds=59):
@@ -625,7 +648,7 @@ def orb_window(now_utc, at, or_minutes, until, explicit_day=None, p=None):
 
 
 def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume=0, confirm=None,
-             max_confirm=None, p=None):
+             max_confirm=None, p=None, session_name=None, allow_short=False):
     """stage1 = {SYM: series} with closes (spark or v8). confirm(sym) -> series with highs/lows
     (None = use the stage-1 series). With confirm and max_confirm, only the max_confirm most
     traded candidates (price x volume so far) are confirmed; the rest are counted as unconfirmed.
@@ -639,8 +662,8 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
         if not s:
             continue
         counts["fetched"] += 1
-        bars = session_bars(s, day, cutoff, p=p)
-        if not usable(bars, day, cutoff, n_range, p=p):
+        bars = session_bars(s, day, cutoff, p=p, session_name=session_name)
+        if not usable(bars, day, cutoff, n_range, p=p, session_name=session_name):
             counts["unusable"] += 1
             continue
         vol = sum(b["v"] for b in bars) if s.get("v") else (s.get("meta") or {}).get("regularMarketVolume") or 0
@@ -648,7 +671,7 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
             counts["illiquid"] += 1
             continue
         counts["scanned"] += 1
-        if orb_candidate(bars, n_range):
+        if orb_candidate(bars, n_range, allow_short=allow_short):
             cands.append((sym, bars, bars[-1]["c"] * vol))
     counts["candidates"] = len(cands)
     if confirm is not None and max_confirm and len(cands) > max_confirm:
@@ -663,12 +686,13 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
             except ScanError as e:
                 failed[sym] = str(e)
                 continue
-            full = session_bars(s2, day, cutoff, p=p)
-            if not usable(full, day, cutoff, n_range, p=p):
+            full = session_bars(s2, day, cutoff, p=p, session_name=session_name)
+            if not usable(full, day, cutoff, n_range, p=p, session_name=session_name):
                 failed[sym] = "the v8 chart has a missing bar"
                 continue
         counts["confirmed"] += 1
-        h = orb_hit(full, n_range)
+        dec = market.price_decimals(p, sym) if (p and p.get("pairs")) else 2
+        h = orb_hit(full, n_range, allow_short=allow_short, dec=dec)
         if h:
             hits.append(dict({"symbol": sym, "setups": ["orb"]}, **h))
     hits.sort(key=lambda x: (x["_t"], x["symbol"]))
@@ -716,6 +740,8 @@ def read_symbols(a, offline_syms=None, p=None):
         syms = symbols_from_file(a.watchlist)
     elif offline_syms is not None and not a.universe:
         syms = sorted(offline_syms)  # offline: every chart in the file, unless a list was given
+    elif p and market.pair_symbols(p) and not a.universe:
+        syms = market.pair_symbols(p)
     else:
         path = a.universe or DEFAULT_UNIVERSE
         if not os.path.exists(path):
@@ -724,6 +750,11 @@ def read_symbols(a, offline_syms=None, p=None):
     out = []
     for s in syms:
         ns = _norm_sym(s, p) if (p and p.get("yahoo_suffix")) else s
+        if p and p.get("pairs"):
+            try:
+                market.require_pair(p, ns)
+            except ValueError as e:
+                raise ScanError(str(e))
         if ns not in out:
             out.append(ns)
     if a.limit:
@@ -880,7 +911,7 @@ def cmd_daily(a):
     else:
         print("No setups.")
     for h in hits[:a.show]:
-        print("  %-6s %10s  RSI %5.1f  %s" % (h["symbol"], _fmt_price(h["price"], p), h["rsi"],
+        print("  %-6s %10s  RSI %5.1f  %s" % (h["symbol"], _fmt_price(h["price"], p, symbol=h["symbol"]), h["rsi"],
                                               ", ".join(LABEL[t] for t in h["setups"])))
     if len(hits) > a.show:
         print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
@@ -917,7 +948,12 @@ def cmd_orb(a):
                 explicit_day = max(days)
                 if at is None:
                     raise ScanError("offline replay: give --at HH:MM or --now \"YYYY-MM-DD HH:MM\"")
-    day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day, p=p)
+    session_name = getattr(a, "session", None)
+    if p.get("orb_sessions"):
+        session_name = session_name or "london"
+    elif session_name:
+        raise ScanError("--session is not used for %s" % market.display_name(p))
+    day, cutoff = orb_window(now, at, a.or_minutes, until, explicit_day, p=p, session_name=session_name)
     symbols = read_symbols(a, offline_syms, p=p)
     confirm = None
     if not a.offline:
@@ -937,8 +973,9 @@ def cmd_orb(a):
             if len(done) % 50 == 0:
                 progress(a, "  stage 2: %d v8 charts so far" % len(done))
             return parse_chart(yahoo_get(chart_path(sym, rng, "%dm" % BAR_MIN, p)), sym)
+    allow_short = market.allows_short(p, cfg)
     hits, counts, failed2 = scan_orb(data, symbols, day, cutoff, a.or_minutes, min_price, min_volume, confirm,
-                                     a.max_confirm, p=p)
+                                     a.max_confirm, p=p, session_name=session_name, allow_short=allow_short)
     failed = dict(failed or {})
     failed.update(failed2)
     nfailed = len([s for s in symbols if s in failed])
@@ -961,9 +998,8 @@ def cmd_orb(a):
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
-    sess = market.sessions(p, day)
-    open_t = sess[0][0]
-    open_dt = datetime.datetime.combine(day, open_t)
+    open_dt = _orb_windows(p, day, session_name=session_name)[0][0]
+    open_t = open_dt.time()
     range_end = open_dt + datetime.timedelta(minutes=a.or_minutes)
     print("Opening-range breakout scan, %s %s %s: %d-minute range (%d:%02d to %s), 5-minute bars, Yahoo."
           % (day_label(day), clock_label(cutoff), tz, a.or_minutes, open_t.hour, open_t.minute,
@@ -982,8 +1018,10 @@ def cmd_orb(a):
               % (len(hits), ("the %s checked" % "{:,}".format(counts["confirmed"])) if counts["unconfirmed"]
                  else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
         for h in hits[:a.show]:
-            print("  %8s  %-6s %10s  range %s to %s  %+.2f%% over" % (
-                h["at"], h["symbol"], _fmt_price(h["price"], p), _fmt_price(h["or_low"], p), _fmt_price(h["or_high"], p), h["pct_over"]))
+            side_tag = ("  " + h["side"].upper()) if h.get("side") else ""
+            print("  %8s  %-6s%s %10s  range %s to %s  %+.2f%% over" % (
+                h["at"], h["symbol"], side_tag, _fmt_price(h["price"], p, symbol=h["symbol"]),
+                _fmt_price(h["or_low"], p, symbol=h["symbol"]), _fmt_price(h["or_high"], p, symbol=h["symbol"]), h["pct_over"]))
         if len(hits) > a.show:
             print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     else:
@@ -1033,6 +1071,7 @@ def main(argv=None):
     p = sub.add_parser("orb", help="opening-range breakouts so far today")
     common(p)
     p.add_argument("--or-minutes", type=int, default=15)
+    p.add_argument("--session", choices=["london", "newyork"], help="ORB session open (fx: london or newyork)")
     p.add_argument("--max-confirm", type=int, default=MAX_CONFIRM,
                    help="v8 charts to fetch in stage 2, most traded first (%d; 0 = all)" % MAX_CONFIRM)
     p.add_argument("--at", help="cut the clock at this WIB time, HH:MM")
