@@ -146,9 +146,11 @@ def is_bracket(order):
     return oc == "bracket" or (not oc and legs)
 
 
-def max_loss(order, p=None, cfg=None):
+def max_loss(order, p=None, cfg=None, rv=None):
     """(dollars, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
     stop = _f(order.get("stop_loss_stop_price")) or _f((order.get("plan") or {}).get("stop"))
+    if rv and _f(rv.get("max_loss")) is not None:
+        return round(_f(rv["max_loss"]), 2), _f(rv.get("stop")) or stop
     q = _f(order.get("qty"))
     if not stop or not q:
         return None, stop
@@ -174,7 +176,7 @@ def max_loss(order, p=None, cfg=None):
     return round(q * int(round(risk * 100)) / 100.0, 2), stop
 
 
-def plain_parts(order, p=None, cfg=None):
+def plain_parts(order, p=None, cfg=None, rv=None):
     """The ticket in plain words, one part per line."""
     prof = p or _IDX
     side = str(order.get("side", "")).upper()
@@ -197,17 +199,17 @@ def plain_parts(order, p=None, cfg=None):
         bits.append("stop %s" % _money(stop, prof))
     if target:
         bits.append("target %s" % _money(target, prof))
-    loss, _ = max_loss(order, p=prof, cfg=cfg)
+    loss, _ = max_loss(order, p=prof, cfg=cfg, rv=rv)
     if loss is not None:
         bits.append("max loss incl. fees %s" % _money(loss, prof))
     return ["%s. Enter it in your broker app yourself." % ", ".join(bits)]
 
 
-def plain(order, p=None, cfg=None):
-    return " / ".join(plain_parts(order, p=p, cfg=cfg))
+def plain(order, p=None, cfg=None, rv=None):
+    return " / ".join(plain_parts(order, p=p, cfg=cfg, rv=rv))
 
 
-def amount_numbers(order, p=None, cfg=None):
+def amount_numbers(order, p=None, cfg=None, rv=None):
     nums = []
     for k in ("notional", "qty", "limit_price", "stop_loss_stop_price", "take_profit_limit_price",
               "stop_loss_limit_price"):
@@ -224,7 +226,7 @@ def amount_numbers(order, p=None, cfg=None):
     q = _f(order.get("qty"))
     if q is not None and lot > 1:
         nums.append(q / lot)
-    loss, _ = max_loss(order, p=p, cfg=cfg)
+    loss, _ = max_loss(order, p=p, cfg=cfg, rv=rv)
     if loss is not None:
         nums.append(loss)
         nums.append(float(round(loss)))
@@ -246,7 +248,7 @@ def _universe_symbols(path, prof):
     return syms
 
 
-def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="trader/universe.txt"):
+def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="trader/universe.txt", rv=None):
     """Is this reply an explicit yes for THIS one order? Returns (ok, why)."""
     raw = (reply or "").strip()
     if not raw:
@@ -274,12 +276,12 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="t
             else float(n.replace(",", ""))
             for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
-        want = amount_numbers(order, p=p, cfg=cfg)
+        want = amount_numbers(order, p=p, cfg=cfg, rv=rv)
         bad = [n for n in nums if not any(abs(n - w) < 0.005 for w in want)]
         if bad:
             return False, "the reply says %s, which does not match this order (%s)" % (
-                ", ".join(_str_num(n) for n in bad), plain(order, p=p, cfg=cfg))
-    return True, "explicit yes for %s" % plain(order, p=p, cfg=cfg)
+                ", ".join(_str_num(n) for n in bad), plain(order, p=p, cfg=cfg, rv=rv))
+    return True, "explicit yes for %s" % plain(order, p=p, cfg=cfg, rv=rv)
 
 
 # ---------------------------------------------------------------- state
@@ -341,7 +343,7 @@ def render(order, idx, total, cfg, risk, state, today):
     acct = "PAPER account" if paper else "LIVE ACCOUNT, REAL MONEY"
     where = "manual (%s)" % (p.get("exchange") or p.get("id", "idx").upper())
     lines = ["ORDER %d of %d, %s, %s" % (idx, total, acct, where)]
-    for part in plain_parts(order, p=p, cfg=cfg):
+    for part in plain_parts(order, p=p, cfg=cfg, rv=rv):
         lines.append("  " + part)
     if order.get("why"):
         lines.append("  why: " + order["why"])
@@ -357,8 +359,8 @@ def render(order, idx, total, cfg, risk, state, today):
 def ticket_json(order, idx, cfg, risk, state, today):
     p = market.from_config(cfg)
     ready, label, rv = status_of(order, risk, state, today)
-    loss, stop = max_loss(order, p=p, cfg=cfg)
-    return {"index": idx, "ready": ready, "status": label, "plain": plain(order, p=p, cfg=cfg),
+    loss, stop = max_loss(order, p=p, cfg=cfg, rv=rv)
+    return {"index": idx, "ready": ready, "status": label, "plain": plain(order, p=p, cfg=cfg, rv=rv),
             "fingerprint": fingerprint(order), "paper": bool(cfg.get("paper", True)),
             "broker": "manual", "manual": True, "market": p.get("id", "idx"),
             "why": order.get("why", ""), "max_loss": loss, "stop": stop}
@@ -498,19 +500,20 @@ def cmd_approve(a):
     if not ready:
         raise TicketError("order %d is not ready: %s" % (a.index, label))
     ok, why = parse_yes(a.reply, order, [o.get("symbol", "") for o in orders], p=p, cfg=cfg,
-                        universe_path=os.path.join(os.path.dirname(a.orders) or "trader", "universe.txt"))
+                        universe_path=os.path.join(os.path.dirname(a.orders) or "trader", "universe.txt"), rv=rv)
     if not ok:
         print("Not recorded: %s. Ask the user again with the ticket for order %d." % (why, a.index))
         return 1
-    loss, stop = max_loss(order, p=p, cfg=cfg)
+    loss, stop = max_loss(order, p=p, cfg=cfg, rv=rv)
+    plain_s = plain(order, p=p, cfg=cfg, rv=rv)
     rec = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fingerprint(order),
            "symbol": market.base_symbol(p, order.get("symbol")), "side": order.get("side"),
            "qty": order.get("qty"), "kind": kind_of(order, rv), "max_loss": loss, "stop": stop,
-           "plain": plain(order, p=p, cfg=cfg), "status": "approved", "reply": a.reply,
+           "plain": plain_s, "status": "approved", "reply": a.reply,
            "paper": bool(cfg.get("paper", True)), "broker": "manual"}
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
-    print("Recorded your yes for order %d: %s." % (a.index, plain(order, p=p, cfg=cfg)))
+    print("Recorded your yes for order %d: %s." % (a.index, plain_s))
     print("Enter this order in your broker app yourself, then record the outcome: "
           "ticket.py result --index %d --status placed|denied|failed" % a.index)
     return 0
@@ -520,12 +523,14 @@ def cmd_decline(a):
     orders, cfg, risk, state, today, now = _load(a)
     order = _pick(orders, a.index)
     p = market.from_config(cfg)
+    rv, _ = risk_verdict(risk, fingerprint(order), today)
+    plain_s = plain(order, p=p, cfg=cfg, rv=rv)
     rec = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fingerprint(order),
            "symbol": market.base_symbol(p, order.get("symbol")), "side": order.get("side"),
-           "plain": plain(order, p=p, cfg=cfg), "status": "declined", "reply": a.reply or "no"}
+           "plain": plain_s, "status": "declined", "reply": a.reply or "no"}
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
-    print("Recorded: you said no to order %d (%s). Nothing was sent." % (a.index, plain(order, p=p, cfg=cfg)))
+    print("Recorded: you said no to order %d (%s). Nothing was sent." % (a.index, plain_s))
     return 0
 
 

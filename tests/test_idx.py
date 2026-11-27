@@ -745,6 +745,25 @@ class IdxRiskTest(unittest.TestCase):
         res_nofee = check.check([order], dict(cfg, buy_fee_pct=0), now=self._at("2026-11-23 10:15"))
         self.assertIn("Cash after the passed orders: Rp 7.037.500", check.report(res_nofee))
 
+    def test_sell_then_buy_batch_deducts_sell_fee_from_cash(self):
+        pf = {"cash": 900000, "positions": [{"ticker": "TLKM", "shares": 1000, "lots": []}]}
+        prices = {"TLKM": 2100, "BBCA": 9975}
+        cfg = {"market": "idx", "cash_buffer_pct": 0, "max_position_pct": 100, "max_loss_per_trade": 200000}
+        orders = [
+            {"symbol": "TLKM", "side": "sell", "qty": "1000", "type": "market", "time_in_force": "day"},
+            {"symbol": "BBCA", "side": "buy", "qty": "300", "type": "limit", "time_in_force": "day",
+             "limit_price": "9975", "order_class": "bracket",
+             "stop_loss_stop_price": "9700", "take_profit_limit_price": "10600"},
+        ]
+        res = check.check(orders, cfg, portfolio=pf, prices=prices, now=self._at("2026-11-23 10:15"))
+        self.assertEqual(res["results"][0]["verdict"], "PASS")
+        self.assertEqual(res["results"][1]["verdict"], "BLOCK")
+        self.assertTrue(any(
+            r.startswith("cash:") and "Rp 2.996.989" in r and "Rp 2.994.750" in r
+            for r in res["results"][1]["reasons"]
+        ), res["results"][1]["reasons"])
+        self.assertEqual(res["cash_after"], 2994750.0)
+
 
 class IdxBrokerTest(unittest.TestCase):
     """Offline end-to-end BBCA manual ticket tests (no API / MCP fields, explicit yes, journalling)."""
@@ -947,6 +966,55 @@ class IdxBrokerTest(unittest.TestCase):
             self.assertEqual(code2, 1)
             self.assertIn("NOT READY", text2)
             self.assertIn("run check.py again", text2)
+
+    def test_ticket_and_journal_use_risk_checked_max_loss(self):
+        order = {
+            "symbol": "BBCA", "side": "buy", "qty": "300", "type": "market", "time_in_force": "day",
+            "order_class": "bracket", "stop_loss_stop_price": "9700", "take_profit_limit_price": "10200",
+            "market": "idx",
+            "plan": {"entry": 9875, "stop": 9700, "target": 10200, "max_loss": 64218.75, "prev_close": 9875},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            cfg_p = os.path.join(d, "config.json")
+            orders_p = os.path.join(d, "orders.json")
+            prices_p = os.path.join(d, "prices.json")
+            risk_p = os.path.join(d, "risk.json")
+            state_p = os.path.join(d, "broker.json")
+            none_p = os.path.join(d, "none")
+            with open(cfg_p, "w", encoding="utf-8") as fh:
+                json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}, fh)
+            with open(orders_p, "w", encoding="utf-8") as fh:
+                json.dump({"orders": [order]}, fh)
+            with open(prices_p, "w", encoding="utf-8") as fh:
+                json.dump({"as_of": "2026-11-23T03:10:00Z", "prices": {"BBCA": 9925}}, fh)
+
+            with redirect_stdout(io.StringIO()):
+                rc = check.main(["--orders", orders_p, "--config", cfg_p, "--portfolio", none_p,
+                                 "--prices", prices_p, "--state", state_p, "--now", "2026-11-23 10:15",
+                                 "--out", risk_p])
+            self.assertEqual(rc, 0)
+            with open(risk_p, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["results"][0]["max_loss"], 79241.25)
+
+            common = ["--orders", orders_p, "--config", cfg_p, "--risk", risk_p,
+                      "--state", state_p, "--now", "2026-11-23 10:15"]
+            code_s, text_s, _ = self._run_ticket(["show", "--index", "1"] + common)
+            self.assertEqual(code_s, 0)
+            self.assertIn("Rp 79.241", text_s)
+            self.assertNotIn("Rp 64.219", text_s)
+
+            code_j, jtext, _ = self._run_ticket(["show", "--index", "1", "--json"] + common)
+            self.assertEqual(code_j, 0)
+            self.assertEqual(json.loads(jtext)["max_loss"], 79241.25)
+
+            code_a, _, _ = self._run_ticket(["approve", "--index", "1", "--reply", "yes 3 lots BBCA"] + common)
+            self.assertEqual(code_a, 0)
+            code_r, _, _ = self._run_ticket(["result", "--index", "1", "--status", "placed"] + common)
+            self.assertEqual(code_r, 0)
+
+            with open(state_p, encoding="utf-8") as fh:
+                recs = json.load(fh)["orders"]
+            self.assertEqual([r["max_loss"] for r in recs], [79241.25, 79241.25])
 
 
 class IdxTimeMachineRestTest(IdxTimeMachineTest):

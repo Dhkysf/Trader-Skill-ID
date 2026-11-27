@@ -663,7 +663,12 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     acct["shares"][sym] = held + value / ref
             elif side == "sell":
                 if value is not None:
-                    acct["cash"] += value
+                    sell_fee = 0.0
+                    if sell_fee_pct > 0:
+                        step = Decimal("1") if p.get("currency") == "IDR" else Decimal("0.01")
+                        sell_fee = float((market._to_decimal(value) * market._to_decimal(sell_fee_pct) / Decimal("100"))
+                                         .quantize(step, rounding=ROUND_HALF_UP))
+                    acct["cash"] += value - sell_fee
                     acct["values"][sym] = max(acct["values"].get(sym, 0.0) - value, 0.0)
                 if q is not None:
                     acct["shares"][sym] = held - q
