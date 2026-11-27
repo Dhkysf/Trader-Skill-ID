@@ -112,6 +112,8 @@ def is_trading_day(p, d):
 
 def calendar_note(p, day):
     """Return a warning string when day.year is outside calendar_years, else None."""
+    if (p or {}).get("holiday_calendar") is False:
+        return None
     years = p.get("calendar_years") or ()
     if not years:
         return None
@@ -152,12 +154,40 @@ def session_windows(p, d):
 
 def in_session(p, local_dt):
     """True if naive local datetime `local_dt` falls inside any session (including prior-day overnight)."""
+    return active_session_window(p, local_dt) is not None
+
+
+def active_session_window(p, local_dt):
+    """Return (start_dt, end_dt) containing `local_dt` (including prior-day overnight), or None."""
     d = local_dt.date()
     for day in (d - datetime.timedelta(days=1), d):
         for so, sc in session_windows(p, day):
             if so <= local_dt < sc:
-                return True
-    return False
+                return (so, sc)
+    return None
+
+
+def trading_day_window(p, day):
+    """Return [(start_dt, end_dt)] for trading day `day` (handles 24/5 overnight rollover)."""
+    d = _as_date(day)
+    raw = (p or {}).get("sessions") or {}
+    has_overnight = any(c <= o for spans in raw.values() for o, c in spans)
+    if has_overnight:
+        return [(so, sc) for so, sc in session_windows(p, d - datetime.timedelta(days=1)) if sc.date() == d]
+    return session_windows(p, d)
+
+
+def orb_session_open(p, session_name, day):
+    """Return naive local open datetime in profile `p`'s timezone for `orb_sessions[session_name]` on `day`."""
+    specs = (p or {}).get("orb_sessions") or {}
+    if session_name not in specs:
+        raise ValueError("unknown orb_session %r; available: %s" % (session_name, ", ".join(specs)))
+    spec = specs[session_name]
+    d = _as_date(day)
+    local_open = datetime.datetime.combine(d, _parse_hm(spec["open"]))
+    if spec.get("use_profile_tz") or "utc_offset_std" not in spec:
+        return local_open
+    return to_local(p, local_to_utc(spec, local_open))
 
 
 def _to_decimal(price):
@@ -168,8 +198,47 @@ def _to_decimal(price):
     return Decimal(str(price))
 
 
-def tick_size(p, price):
+def require_pair(p, symbol=None):
+    """Return pair spec dict for pair-based profiles, raising ValueError if missing or unsupported."""
+    pairs = (p or {}).get("pairs")
+    if not pairs:
+        return None
+    if not symbol:
+        raise ValueError("market %r requires a symbol for pair lookup" % ((p or {}).get("id") or "fx"))
+    base = base_symbol(p, symbol)
+    if base not in pairs:
+        raise ValueError("%s is not a supported pair yet; supported: %s" % (base, ", ".join(pairs.keys())))
+    return pairs[base]
+
+
+def pair_symbols(p):
+    """Return list of configured pair symbols for profile `p`."""
+    return list(((p or {}).get("pairs") or {}).keys())
+
+
+def pip_size(p, symbol=None):
+    """Return pip size as Decimal for pair-based profiles, else None."""
+    spec = require_pair(p, symbol)
+    if spec is None or "pip" not in spec:
+        return None
+    return Decimal(str(spec["pip"]))
+
+
+def quote_currency(p, symbol=None):
+    """Return quote currency for `symbol` on pair-based profiles, else profile currency."""
+    if (p or {}).get("pairs"):
+        require_pair(p, symbol)
+        return base_symbol(p, symbol)[3:6]
+    return (p or {}).get("currency", "IDR")
+
+
+def tick_size(p, price, symbol=None):
     """Return the tick size (as Decimal) for `price` under profile `p`."""
+    spec = require_pair(p, symbol)
+    if spec is not None:
+        if "tick" in spec:
+            return Decimal(str(spec["tick"]))
+        return Decimal("10") ** -int(spec["price_decimals"])
     d = _to_decimal(price)
     table = p.get("tick_table")
     if table:
@@ -179,13 +248,13 @@ def tick_size(p, price):
     return Decimal(str(p["tick"]))
 
 
-def round_tick(p, price, mode="nearest"):
+def round_tick(p, price, mode="nearest", symbol=None):
     """Round `price` to the profile's tick size using mode 'down', 'up', or 'nearest'."""
     rounding = _ROUND_MODES.get(mode)
     if rounding is None:
         raise ValueError("unknown round_tick mode %r; expected down, up, or nearest" % (mode,))
     d = _to_decimal(price)
-    step = tick_size(p, d)
+    step = tick_size(p, d, symbol=symbol)
     return (d / step).to_integral_value(rounding=rounding) * step
 
 
@@ -274,18 +343,24 @@ def from_config(cfg_or_path=None):
     return load("idx")
 
 
-def price_decimals(p):
+def price_decimals(p, symbol=None):
     """Number of decimal places for prices in profile `p` (default: 0 for IDR, else 2)."""
+    spec = require_pair(p, symbol)
+    if spec is not None:
+        return int(spec["price_decimals"])
     val = (p or {}).get("price_decimals")
     if val is not None:
         return int(val)
     return 0 if (p or {}).get("currency", "IDR") == "IDR" else 2
 
 
-def price_tol(p, price=None):
+def price_tol(p, price=None, symbol=None):
     """Tick-based comparison tolerance as Decimal: min(0.005, tick / 2)."""
     prof = p or {}
-    if price is not None and (prof.get("tick_table") or prof.get("tick") is not None):
+    spec = require_pair(prof, symbol)
+    if spec is not None:
+        tick = Decimal(str(spec["tick"])) if "tick" in spec else (Decimal("10") ** -int(spec["price_decimals"]))
+    elif price is not None and (prof.get("tick_table") or prof.get("tick") is not None):
         tick = tick_size(prof, price)
     elif prof.get("tick_table"):
         tick = min(Decimal(str(e["tick"])) for e in prof["tick_table"])
@@ -313,10 +388,17 @@ def money(p, amount):
     return (prefix + s) if prefix is not None else ("%s %s" % (ccy, s))
 
 
-def price(p, x):
+def price(p, x, symbol=None):
     """Format a price `x` with profile `p`'s price_decimals (always fixed places; IDR as Rp)."""
+    spec = require_pair(p, symbol)
+    dec = price_decimals(p, symbol=symbol)
+    if spec is not None:
+        step = Decimal("1") if dec <= 0 else Decimal("10") ** -dec
+        d = _to_decimal(x).quantize(step, rounding=ROUND_HALF_UP)
+        if d == 0:
+            d = Decimal("0").quantize(step)
+        return ("{:,." + str(dec) + "f}").format(d) if dec > 0 else "{:,}".format(int(d))
     ccy = (p or {}).get("currency", "IDR")
-    dec = price_decimals(p)
     if ccy == "IDR" and dec == 0:
         return money(p, x)
     step = Decimal("1") if dec <= 0 else Decimal("10") ** -dec

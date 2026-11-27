@@ -1,0 +1,13 @@
+{
+  "market": "fx",
+  "allow_short": true,
+  "allow_margin": true,
+  "allow_options": false,
+  "paper": true,
+  "require_stop": true,
+  "broker": "manual",
+  "no_entries_after": "16:30",
+  "flat_by": "16:45",
+  "min_reward_risk": 1.0,
+  "blocked": []
+}

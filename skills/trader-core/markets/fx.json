@@ -1,0 +1,91 @@
+{
+  "id": "fx",
+  "display_name": "Forex",
+  "name": "Spot Forex (24/5 NY rollover)",
+  "exchange": "FX",
+  "allow_short": true,
+  "allow_margin": true,
+  "symbol_pattern": "^[A-Z]{6}(=X)?$",
+  "yahoo_suffix": "=X",
+  "data_delay_min": 0,
+  "timezone": "america_new_york",
+  "tz_label": "ET",
+  "utc_offset_std": -5,
+  "utc_offset_dst": -4,
+  "dst": {
+    "start": {"month": 3, "nth_sunday": 2, "utc_hour": 7},
+    "end": {"month": 11, "nth_sunday": 1, "utc_hour": 6}
+  },
+  "sessions": {
+    "sun": [["17:00", "17:00"]],
+    "mon": [["17:00", "17:00"]],
+    "tue": [["17:00", "17:00"]],
+    "wed": [["17:00", "17:00"]],
+    "thu": [["17:00", "17:00"]],
+    "fri": [],
+    "sat": []
+  },
+  "orb_sessions": {
+    "london": {
+      "open": "08:00",
+      "tz_label": "London",
+      "utc_offset_std": 0,
+      "utc_offset_dst": 1,
+      "dst": {
+        "start": {"month": 3, "nth_sunday": -1, "utc_hour": 1},
+        "end": {"month": 10, "nth_sunday": -1, "utc_hour": 1}
+      }
+    },
+    "newyork": {
+      "open": "08:00",
+      "tz_label": "NY",
+      "use_profile_tz": true
+    }
+  },
+  "holiday_calendar": false,
+  "holidays": {},
+  "liquidity_note": "Dec 25 and Jan 1: thin liquidity, wide spreads",
+  "currency": "quote",
+  "lot": 100000,
+  "min_price": 0,
+  "fees": {
+    "buy_fee_pct": 0,
+    "sell_fee_pct": 0
+  },
+  "defaults": {
+    "no_entries_before": null,
+    "no_entries_after": "16:30",
+    "flat_by": "16:45",
+    "no_entries_before_break_min": 0,
+    "min_price": 0,
+    "min_value": 0
+  },
+  "pairs": {
+    "USDIDR": {
+      "pip": 1,
+      "price_decimals": 4,
+      "note": "brokers quote USDIDR differently, check yours"
+    },
+    "EURUSD": {"pip": 0.0001, "price_decimals": 5},
+    "GBPUSD": {"pip": 0.0001, "price_decimals": 5},
+    "USDJPY": {"pip": 0.01, "price_decimals": 3},
+    "AUDUSD": {"pip": 0.0001, "price_decimals": 5},
+    "USDCAD": {"pip": 0.0001, "price_decimals": 5},
+    "USDCHF": {"pip": 0.0001, "price_decimals": 5},
+    "NZDUSD": {"pip": 0.0001, "price_decimals": 5}
+  },
+  "sources": {
+    "ny_rollover_and_dst": {
+      "url": "https://www.nist.gov/pml/time-and-frequency-division/popular-links/daylight-saving-time-dst",
+      "checked": "2026-11-27"
+    },
+    "london_dst": {
+      "url": "https://www.gov.uk/when-do-the-clocks-change",
+      "checked": "2026-11-27"
+    },
+    "data_delay": {
+      "url": "https://help.yahoo.com/kb/exchanges-data-providers-yahoo-finance-sln2310.html",
+      "checked": "2026-11-27"
+    }
+  }
+}
