@@ -3,8 +3,8 @@ name: trader-core
 description: >-
   Shared market profiles, trading calendars, DST clock conversions, and tick
   rounding for all Trader-Skill-ID skills. Reads the selected market profile
-  (default "idx") from JSON data files under markets/ so US stocks, IDX, and
-  forex share one clock and session layer without duplicating rules.
+  (default "idx") from JSON data files under markets/ so IDX and future profiles
+  like forex share one clock and session layer without duplicating rules.
 ---
 
 # trader-core
@@ -49,7 +49,7 @@ import market
 
 ## API summary (`market.py`)
 
-- `load(name="us")` - load and cache a market profile from `markets/<name>.json`. Raises `ValueError` listing available profiles for unknown names.
+- `load(name="idx")` - load and cache a market profile from `markets/<name>.json`. Raises `ValueError` listing available profiles for unknown names.
 - `utc_offset(p, utc)` - hours from UTC for profile `p` at `utc` (naive or aware).
 - `to_local(p, utc)` - convert UTC datetime to naive local wall-clock datetime.
 - `local_to_utc(p, local)` - convert naive local wall-clock datetime to naive UTC.

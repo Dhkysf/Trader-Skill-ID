@@ -1,7 +1,7 @@
 ---
 name: trader-timemachine
 description: >-
-  Time Machine. Replays every possible outcome of a trade before you risk a
+  Time Machine. Replays every possible outcome of a trade before you risk any
   money: 10,000 simulated sessions plus every past time the setup fired.
   Takes the plan from trader-exit (entry, stop, target), rebuilds the rest of
   the day 10,000 times from the stock's own 5-minute bars over the last 60
@@ -32,16 +32,16 @@ good-looking replay does not change that.
 ```bash
 python "<skill-dir>/timemachine.py" run                    # trader/plan.json, 10,000 replays, seed 19
 python "<skill-dir>/timemachine.py" run --write            # also save trader/timemachine.json
-python "<skill-dir>/timemachine.py" run --until 15:55      # end each replay at your flat-by time
+python "<skill-dir>/timemachine.py" run --until 15:45      # end each replay at your flat-by time
 python "<skill-dir>/timemachine.py" run --json
-python "<skill-dir>/timemachine.py" run --symbol BBCA --date 2026-10-19 \
+python "<skill-dir>/timemachine.py" run --symbol BBCA --date 2026-11-23 \
     --entry 5550 --stop 5425 --target 5800 --entry-time "09:35"
 python "<skill-dir>/timemachine.py" chart --from           # ASCII fan chart of the saved run
 ```
 
 Other flags: `--replays N`, `--seed N` (default 19), `--window N` (default 2
 bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
-`--now "2026-10-19 10:15"` (WIB) to pin the clock.
+`--now "2026-11-23 10:15"` (WIB) to pin the clock.
 
 ## What it reads and writes
 
@@ -53,10 +53,11 @@ bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
 
 ## How it works
 
-1. **The pool.** It keeps only FULL sessions before the plan's date: all 78
-   five-minute bars, 09:00 to 16:00 WIB (with lunch break). Half days, gaps and today
-   are left out. Every bar becomes four ratios to the bar before it:
-   open, high, low and close over the previous close.
+1. **The pool.** It keeps only FULL sessions before the plan's date: Mon-Thu
+   64 five-minute bars (36 + 28) and Fri 52 bars (30 + 22), excluding the
+   lunch break and pre-closing. Gaps and today are left out. Every bar
+   becomes four ratios to the bar before it: open, high, low and close over
+   the previous close.
 2. **One replay.** Start at the entry price. For each bar left in the day,
    pick a past bar from the same time of day (plus or minus 2 bars) at
    random, and scale it to the current price. Bar by bar, it checks the stop
@@ -100,7 +101,7 @@ grid). A live in-progress bar is never used.
 
 1. Make sure `trader/plan.json` is today's plan from `/trader-exit`. If there
    is none, run that first, or pass the plan as flags.
-2. Run `timemachine.py run --write`. Add `--until 15:55` when the plan has a
+2. Run `timemachine.py run --write`. Add `--until 15:45` when the plan has a
    flat-by time, so "neither" means still open at the time you would get out.
 3. Tell the user, in this order: the four odds, the median and the 5 to 95
    range of the price at the close, the average R, the history line, then the
@@ -112,11 +113,11 @@ grid). A live in-progress bar is never used.
    `/trader-news` for the stock before going on.
 6. If the user still wants the trade, hand off to `/trader-budget` to size it.
 
-## Example: the reel
+## Example
 
-BBCA, Monday 2026-11-23. The 15-minute opening range is 5425 to 5500.
-The 09:30 bar closes above it: entry 5550 at 09:35 WIB (bar 6), stop 5425
-(the range midpoint, rounded down), target 370.04 (1R, risk 5.86 a share).
+BBCA, Monday 2026-11-23. The 15-minute opening range is Rp 5.425 to Rp 5.500.
+The 09:30 bar closes above it: entry Rp 5.550 at 09:35 WIB (bar 6), stop Rp 5.425
+(the range low), target Rp 5.675 (1R, risk Rp 125 a share).
 
 ```
 10,000 replays of the rest of the session, 09:35 to 15:50 WIB, seed 19.
@@ -135,7 +136,7 @@ Close to a coin flip: target first 29.4 % vs stop first 25.5 %.
 At 1R the target has to come first in half of the replays that hit one
 side. It did in 53.6 %. The replays came out close to a coin flip, and the
 real history was slightly worse than even. That is the honest answer for this setup, and it is what
-the user should hear before `/trader-budget` sizes 8 shares.
+the user should hear before `/trader-budget` sizes it in 100-share lots.
 
 ## Rules
 
@@ -170,7 +171,7 @@ that carries `"market": "idx"`.
   ARA/ARB band (reference = previous close), stops and targets are checked for
   valid IDX ticks, and runs that touch the band edge are counted.
 - **Delay and minimum sessions:** Yahoo `.JK` data is about 10 minutes late.
-  Fewer than 20 full sessions means no verdict (same rule as US).
+  Fewer than 20 full sessions means no verdict.
 - **Out of scope:** budget/risk/broker, short trades, forex.
 
 ## Safety

@@ -2,8 +2,8 @@
 name: trader-scanner
 description: >-
   Chart Scanner. Scans thousands of charts for setups: opening-range
-  breakouts, flags, oversold bounces. Builds the list of US-listed common
-  stocks from the IDX market profile or a watchlist,
+  breakouts, flags, oversold bounces. Builds the list of Indonesian stocks
+  (IDX) from a local Daftar Saham CSV or watchlist,
   runs a pre-market scan of daily closes (20-day closing-high breakout, bull
   flag, reclaimed the 20-day average, oversold, oversold bounce) and an
   intraday opening-range breakout scan on 5-minute bars, then writes
@@ -27,7 +27,7 @@ the scanner does not change that. It only saves you from flipping through
 `<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-scanner` in this repo, `.agents/skills/trader-scanner` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python "<skill-dir>/scan.py" universe                       # -> trader/universe.txt
+python "<skill-dir>/scan.py" universe --from data/daftar-saham.csv # -> trader/universe.txt
 python "<skill-dir>/scan.py" daily                          # before the open -> trader/watchlist.json
 python "<skill-dir>/scan.py" daily --symbols BBCA,BBRI,BMRI  # or --watchlist FILE, --limit 200
 python "<skill-dir>/scan.py" orb                            # after 09:20 WIB -> trader/watchlist.json
@@ -35,9 +35,9 @@ python "<skill-dir>/scan.py" orb --at 09:35                 # cut the clock at 0
 python "<skill-dir>/scan.py" orb --watchlist trader/watchlist.json --json
 ```
 
-Flags: `--min-price 5` and `--min-volume` (daily 1,000,000, orb 0),
+Flags: `--min-price 100` and `--min-volume` (daily 1,000,000, orb 0),
 `--or-minutes 15`, `--max-confirm 200` (orb stage 2),
-`--now "2026-10-19 10:15"` (WIB) to pin the clock, `--offline PATH`
+`--now "2026-11-23 10:15"` (WIB) to pin the clock, `--offline PATH`
 to read saved Yahoo files, `--no-write`, `--show N`, `--json`. Exit code 0
 when the scan found something, 1 when it found nothing or could not run (the
 reason is one plain line).
@@ -52,40 +52,22 @@ reason is one plain line).
 
 ## The universe
 
-`universe` reads the IDX market profile (`skills/trader-core/markets/idx.json`)
-and keeps symbols matching the IDX suffix (`.JK`) when filtering:
+`universe --from data\daftar-saham.csv` reads a local IDX Daftar Saham CSV
+(comma or semicolon separated) or plain text list and writes
+`trader/universe.txt` (`SYMBOL|Name`):
 
-1. It is not a test issue, not an ETF, not NextShares.
-2. It is a plain ticker: 1 to 5 letters, or 1 to 4 letters plus one class
-   letter after a dot (BRK.B). A `$` preferred (ABR$D) is out, and so is a
-   `.U`, `.W` or `.R` suffix (units, warrants, rights).
-3. Out, whatever else the name says: warrants; SPAC units and rights ("Units,
-   each consisting of", "Rights to receive"); notes, ETNs, debentures; a %
-   coupon; "Depositary Shares" that are not American or Global (those carry a
-   preferred).
-4. In: the name calls it common stock, common shares or units, ordinary
-   shares, shares of beneficial interest, ADS / ADR / American or Global
-   depositary shares, or partnership or trust units.
-5. Out: the name still says unit, right, bond, preferred or preference.
-6. In: everything else (plain names like "AMETEK, Inc.").
-
-On the Oct 19 2026 files this keeps 5,943. The reel said 5,259: that count
-came from an ad hoc filter (names that say common or ordinary, no ADRs). All
-5,259 of those are in this list; the 684 extra are mostly ADRs, closed-end
-funds and partnership units. The Oct 20 files gave 5,942.
+1. Drops `Pemantauan Khusus` rows.
+2. Keeps plain 4-letter IDX stock codes (e.g. `BBCA`, `BBRI`, `TLKM`).
 
 ## The daily scan (before the open)
 
-Yahoo's spark endpoint returns closes for 20 symbols a request, so 5,942
-symbols take 298 requests. On Oct 20 2026 that took 145 seconds with the
-polite pause (0.3 s). Liquidity comes from the spark meta: last price at
-least `--min-price` and last session's volume at least `--min-volume`. Run it
-before the open or after the close: during the session the volume is the
+Yahoo's spark endpoint returns closes for 20 symbols a request. Liquidity comes
+from the spark meta: last price at least `--min-price` (default `100` IDR) and
+last session's value (price x volume) at least `min_value_idr` (`5,000,000,000`).
+Run it before the open or after the close: during the session the volume is the
 day's so far, and today's daily bar is left out until 16:00 WIB.
 
-The setups are computed from daily closes only (spark has no highs or lows),
-so they are close cousins of the reel's `refs/scan.py`, which used highs and
-lows:
+The setups are computed from daily closes only (spark has no highs or lows):
 
 | setup | the rule on closes |
 | --- | --- |
@@ -95,14 +77,12 @@ lows:
 | `oversold` | RSI 14 (Wilder) under 30 |
 | `oversold_bounce` | RSI 14 was under 30 yesterday and today closed up |
 
-A closing-high breakout fires more often than an intraday-high one (KO on
-Oct 16 broke its 20-day closing high, not its 20-day intraday high). Hits are
-listed most traded first (price times volume).
+Hits are listed most traded first (price times volume).
 
 ## The opening-range breakout scan (during the session)
 
-The opening range is the first `--or-minutes` (15) of the session: the 9:30,
-9:35 and 9:40 five-minute bars. A hit is the first completed 5-minute bar
+The opening range is the first `--or-minutes` (15) of the session: the 09:00,
+09:05 and 09:10 WIB five-minute bars. A hit is the first completed 5-minute bar
 to CLOSE above the range high, at that bar's close time.
 
 1. Stage 1, every symbol: spark closes of today's 5-minute bars, 20 a
@@ -111,34 +91,29 @@ to CLOSE above the range high, at that bar's close time.
    (the range high is at least every range close), so no breakout is lost.
 2. Stage 2, each candidate: the v8 chart with real highs and lows, one
    request each. Range high = the highest high of the range bars, range low =
-   the lowest low. On a strong morning most charts are candidates, so stage 2
-   checks at most `--max-confirm` (200) of them, the most traded first (price
-   times volume so far), and prints PARTIAL with the count it skipped.
-   `--max-confirm 0` checks them all.
+   the lowest low. Stage 2 checks at most `--max-confirm` (200) of them, the
+   most traded first (price times volume so far), and prints PARTIAL with the
+   count it skipped. `--max-confirm 0` checks them all.
 
-Timing, live on Tue Oct 20 2026 (a strong morning): 100 liquid names at
-10:01 AM took 35 seconds (5 spark requests, 70 v8 charts, 51 of 91 usable
-charts broke out). The whole universe at 10:03 AM took about 4 minutes (298
-spark requests, then 200 v8 charts): 2,448 usable charts, 1,782 candidates,
-the 200 most traded checked, 119 of those broke out. For a fast answer, scan
-the daily watchlist or a list of names you trade (`--watchlist`, `--symbols`).
+For a fast answer, scan the daily watchlist or a list of names you trade
+(`--watchlist`, `--symbols`).
 
-A chart is usable only when every 5-minute bar from 9:30 to the cutoff is
+A chart is usable only when every 5-minute bar from 09:00 WIB to the cutoff is
 there; a missing bar means a halt or a thin stock. Null closes are dropped,
 a bar off the 5-minute grid (the live tick, like 10:58:07) is dropped, and a
-bar counts only once it is complete (start + 5 minutes). Before 9:50 AM, on a
-weekend or holiday, after the close, or after `no_entries_after` (an expired
-setup) it prints one plain line and writes nothing. The 1:00 PM early closes
-are in the calendar.
+bar counts only once it is complete (start + 5 minutes). Before 09:20 WIB, during
+the lunch break, on a weekend or IDX holiday, after the 15:50 WIB close, or
+after `no_entries_after` (an expired setup) it prints one plain line and writes
+nothing.
 
 ## Data and limits
 
 - Yahoo's chart and spark endpoints are free, unofficial and can lag. Bars are
   5-minute bars, bar by bar, never tick by tick. query2 first, query1 on a 429
   or 5xx, one retry after a 5-second wait on a 429.
-- Partial results are said as partial: "Fetched 4,980 of 5,259 charts (279
+- Partial results are said as partial: "Fetched 820 of 900 charts (80
   failed or had no data)". Never round a partial scan up to "the whole market".
-- IDX holidays for 2026 and 2027 in `skills/trader-core/markets/idx.json`.
+- IDX holidays for 2026 are in `skills/trader-core/markets/idx.json`.
 - IDX (`"market": "idx"` in `trader/config.json`): `universe --from data\daftar-saham.csv`
   reads a local IDX Daftar Saham CSV (comma or semicolon separated, dropping
   `Pemantauan Khusus` rows) or plain text list. `daily` defaults to
@@ -148,7 +123,7 @@ are in the calendar.
 
 ## Steps
 
-1. Once a week or so: `scan.py universe`.
+1. Once a week or so: `scan.py universe --from data/daftar-saham.csv`.
 2. Before the open: `scan.py daily`. Tell the user the counts (fetched,
    liquid, scanned, hits) and the top few by setup.
 3. After 09:20 WIB (09:35 is the classic): `scan.py orb`. Tell the user how
@@ -157,32 +132,21 @@ are in the calendar.
 4. The user picks one chart. Hand it on: `/trader-news TICKER` (what is moving
    it), then `/trader-entry TICKER` (the entry bar by bar). Never pick for them.
 
-## Example: the reel
+## Example
 
-Monday Oct 19 2026, scan at 10:15 AM over the reel's 234-ticker wall
-(`tests/fixtures/trader-scanner/wall5m-2026-10-19.json.gz`, real Yahoo charts):
+Monday 2026-11-23, scan at 10:15 WIB over IDX watchlist (`--offline`):
 
 ```
-python scan.py orb --offline wall5m-2026-10-19.json.gz --now "2026-10-19 10:15" --min-price 0
-Fetched 233 of 234 charts (1 failed or had no data); 231 usable; 95 candidates, 95 confirmed with real highs and lows.
-42 of 231 charts closed above their opening-range high by 10:15 AM:
-   9:50 AM  AMC         $2.97  range 2.90 to 2.96  +0.50% over
-  ...
-  10:15 AM  TSLA      $364.18  range 354.47 to 362.18  +0.55% over
+python scan.py orb --offline BBCA_5M --now "2026-11-23 10:15"
+Fetched 1 of 1 charts; 1 usable; 1 candidates, 1 confirmed with real highs and lows.
+1 of 1 charts closed above their opening-range high by 10:15 WIB:
+  09:35 WIB  BBCA   Rp 5.550  range Rp 5.425 to Rp 5.500  +0.91% over
 ```
 
-The reel's wall had no price floor (AMC at $2.97 is one of the 42), hence
-`--min-price 0`; with the default $5 floor it is 41. TSLA's range is the 9:30
-to 9:40 bars, high 362.18, low 354.47; the 10:10 bar closed at 364.18, 0.55 %
-over the high, at 10:15 AM. The user picks TSLA and the agent hands it to
-`/trader-news TSLA`, then `/trader-entry TSLA`. In the reel the universe was
-5,259 US stocks; this tool's rule gives 5,943 on the same files.
-
-The pre-market scan that morning (closes through Fri Oct 16, the reel's daily
-charts) tags BLK, CI, XOM and HD a 20-day breakout, CCL a bull flag, F, JPM
-and GE a reclaim of the 20-day average, and BAC, MS, RIVN and PLUG oversold,
-as the reel did. On closes it also tags KO (breakout), RCL (flag) and PNC (an
-oversold bounce).
+BBCA's opening range is the 09:00 to 09:10 WIB bars (high Rp 5.500, low Rp 5.425);
+the 09:30 bar closed at Rp 5.550, 0.91% over the high, at 09:35 WIB. The user
+picks BBCA and the agent hands it to `/trader-news BBCA`, then
+`/trader-entry BBCA`.
 
 ## Rules
 

@@ -6,10 +6,10 @@ description: >-
   by close" at your flat-by time), plus above / below / stop / target levels,
   percent moves from the previous close, any time of day, and the IDX
   opening bell, each ringing once so you are not spammed. Knows IDX hours
-  and 2026-2027 holidays, works out WIB itself, fetches free delayed quotes
+  and 2026 holidays, works out WIB itself, fetches free delayed quotes
   (Yahoo chart JSON) one ticker at a time, and writes trader/prices.json for sizing and the
   risk check. Use when the user says "alert me when", "tell me if BBCA hits",
-  "watch my stop", "watch my trade", "remind me to close by 3:55", "is the
+  "watch my stop", "watch my trade", "remind me to close by 15:45", "is the
   market open", "when does the market open", "get me a price", or right
   after /trader-exit writes a plan.
 argument-hint: "[ticker] [price]"
@@ -31,8 +31,8 @@ python "<skill-dir>/alerts.py" add --from-plan                # stop, target, fl
 python "<skill-dir>/alerts.py" add --opening-bell
 python "<skill-dir>/alerts.py" add --symbol BBCA --stop 8800
 python "<skill-dir>/alerts.py" add --symbol BBCA --target 9200
-python "<skill-dir>/alerts.py" add --at 15:55 --label "flat by close" --before-close
-python "<skill-dir>/alerts.py" add --symbol KO --pct 3
+python "<skill-dir>/alerts.py" add --at 15:45 --label "flat by close" --before-close
+python "<skill-dir>/alerts.py" add --symbol TLKM --pct 3
 python "<skill-dir>/alerts.py" check                          # exit 0 = something rang
 python "<skill-dir>/alerts.py" quote BBCA --write             # -> trader/prices.json
 python "<skill-dir>/alerts.py" quote --holdings --write       # portfolio + plan tickers
@@ -40,7 +40,7 @@ python "<skill-dir>/alerts.py" list
 python "<skill-dir>/alerts.py" reset bbca-plan-stop
 ```
 
-`--now "2026-10-19 15:55"` pins the clock (WIB); `--offline DIR`
+`--now "2026-11-23 15:45"` pins the clock (WIB); `--offline DIR`
 reads saved quote files instead of the network.
 
 ## What it reads and writes
@@ -64,40 +64,30 @@ reads saved quote files instead of the network.
 | `opening_bell` | IDX is open | once per trading day |
 
 A rule with `"date"` is watched on that WIB date only; `--from-plan`
-rules carry the plan's date, so yesterday's stop never rings today. A `time`
-rule with `"before_close": true` moves 3 hours earlier on a 1:00 p.m. early
-close, so "flat by close" at 15:55 rings at 12:55 on those days.
+rules carry the plan's date, so yesterday's stop never rings today.
 
 ## Quotes
 
-- `yahoo` (default): `query2.finance.yahoo.com/v8/finance/chart/<TICKER>`, an
-  unofficial free JSON endpoint, one request per ticker, half a second apart.
-  On a 429 it waits and tries once more; on a 429 or a 5xx after that it
-  tries `query1`. It identifies itself as `day-trader-skill/2.0`.
-- `yahoo`: Yahoo Finance chart JSON (`BBCA.JK`).
-  It answered 404 on 2026-10-13; the parser stays for when it is back.
+- `yahoo` (default): `query2.finance.yahoo.com/v8/finance/chart/<TICKER>` (e.g.
+  `BBCA.JK`), an unofficial free JSON endpoint, one request per ticker, half a
+  second apart. On a 429 it waits and tries once more; on a 429 or a 5xx
+  after that it tries `query1`. It identifies itself as `day-trader-skill/2.0`.
 - Free quotes are unofficial, delayed and can lag. They are fine for alerts
   and for checking a size, not for timing an order. The broker's price is the
   one that fills. Each price in `trader/prices.json` keeps its quote time, and
   trader-risk only uses one under 15 minutes old.
 - If Yahoo is down, enter the latest price from your broker app into
-  `trader/prices.json` as `{"as_of": "...Z", "prices": {"TSLA": 366.48}}`.
+  `trader/prices.json` as `{"as_of": "...Z", "prices": {"BBCA": 9875}}`.
 
 ## The IDX clock
 
-Regular session 09:00 to 16:00 WIB (with lunch break), closed on weekends and
-on IDX holidays in `skills/trader-core/markets/idx.json`.
+Regular sessions: Mon-Thu 09:00-12:00 and 13:30-15:50 WIB, Fri 09:00-11:30 and
+14:00-15:50 WIB. Closed on weekends and on 2026 IDX holidays in
+`skills/trader-core/markets/idx.json`.
 
-- 2026: Jan 1, Jan 19, Feb 16, Apr 3 (Good Friday), May 25, Jun 19, Jul 3
-  (Independence Day observed), Sep 7, Nov 26, Dec 25. Early close 1:00 p.m. on
-  Nov 27 and Dec 24.
-- 2027: Jan 1, Jan 18, Feb 15, Mar 26 (Good Friday), May 31, Jun 18
-  (Juneteenth observed), Jul 5 (Independence Day observed), Sep 6, Nov 25,
-  Dec 24 (Christmas observed). Early close 1:00 p.m. on Nov 26.
-
-Daylight saving time is worked out in the tool, so it needs no time zone
-files and ignores the computer's own zone. For any other year it says the
-holiday list is unknown.
+WIB is UTC+7 year-round (no daylight saving time), worked out in the tool so it
+ignores the computer's own zone. For any other year it notes that the holiday
+list is unknown.
 
 ## Steps
 
@@ -108,32 +98,32 @@ holiday list is unknown.
    rules and rings each alert once. A check reads the latest delayed quote;
    it is not a live feed, and a price can pass a level between two checks.
 3. Tell the user what rang in one line each. A stop or target alert means the
-   bracket order has probably filled: check `get_open_position` and record the
-   fill with trader-broker. "Flat by close" means close anything still open:
+   bracket order has probably filled: check your broker app and record the fill
+   with trader-broker. "Flat by close" means close anything still open:
    trader-broker `flatten`, then trader-risk, then the user's yes. Never act
    for them.
 
-## Example: the reel
+## Example
 
-BBCA on Monday 2026-11-23: entry 9875 at 09:35 WIB, stop 9700, target
-370.04, flat by 15:55. `add --from-plan` writes `tsla-plan-stop`,
-`tsla-plan-target` and `tsla-flat-by` for that day. A `check` at 10:53 reads
-the real 10:52 quote, 366.48, between the stop and the target:
+BBCA on Monday 2026-11-23: entry Rp 9.875 at 09:35 WIB, stop Rp 9.775, target
+Rp 9.975, flat by 15:45. `add --from-plan` writes `bbca-plan-stop`,
+`bbca-plan-target` and `bbca-flat-by` for that day. A `check` at 10:53 reads
+a quote of Rp 9.900, between the stop and the target:
 
 ```
-IDX OPEN (2026-10-19 10:53 WIB, session 1).
-Nothing hit. 3 rule(s) watched today, BBCA Rp 9.000.
+IDX OPEN (2026-11-23 10:53 WIB, session 1).
+Nothing hit. 3 rule(s) watched today, BBCA Rp 9.900.
 ```
 
 At 15:45 WIB:
 
 ```
-ALERT Flat by close: it is 15:45 WIB (set for 15:45), the market closes at 16:00. If BBCA is still
-open, close it: trader-broker flatten --symbol TSLA builds the sell ticket, then trader-risk and your yes.
+ALERT Flat by close: it is 15:45 WIB (set for 15:45), the market closes at 15:50. If BBCA is still
+open, close it: trader-broker flatten --symbol BBCA builds the sell ticket, then trader-risk and your yes.
 ```
 
 It rings once. The next morning the plan's three alerts are no longer
-watched; with `add --opening-bell`, the bell rings at 9:30.
+watched; with `add --opening-bell`, the bell rings at 09:00 WIB.
 
 ## Rules
 

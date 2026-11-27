@@ -9,7 +9,7 @@ description: >-
   and how far, triggered with the time and the price, expired, or not open
   yet, and writes trader/entry.json for /trader-exit. Long side only. It never
   places an order. Use when the user says "tell me when to get in", "watch
-  TSLA", "has it broken out", "did it break the opening range", "entry
+  BBCA", "has it broken out", "did it break the opening range", "entry
   signal", "time my entry", "check my watchlist", or after /trader-scanner
   and /trader-news, before /trader-exit.
 argument-hint: "[TICKER] [--setup orb|level] [--interval 5m|1m]"
@@ -27,17 +27,17 @@ people money, and a clean signal does not change that.
 `<skill-dir>` is the folder that holds this SKILL.md (`skills/trader-entry` in this repo, `.agents/skills/trader-entry` in a workspace). Commands below use `python` (use `python3` on macOS/Linux).
 
 ```bash
-python "<skill-dir>/entry.py" check TSLA                  # 15-minute opening range, 5-minute bars
-python "<skill-dir>/entry.py" check TSLA --write          # also save trader/entry.json
-python "<skill-dir>/entry.py" check TSLA --setup level --level 371.20
-python "<skill-dir>/entry.py" check TSLA --interval 1m --min-volume-x 1.5
-python "<skill-dir>/entry.py" watch TSLA --until 15:30    # one line per closed bar, stops on the trigger
+python "<skill-dir>/entry.py" check BBCA                  # 15-minute opening range, 5-minute bars
+python "<skill-dir>/entry.py" check BBCA --write          # also save trader/entry.json
+python "<skill-dir>/entry.py" check BBCA --setup level --level 9900
+python "<skill-dir>/entry.py" check BBCA --interval 1m --min-volume-x 1.5
+python "<skill-dir>/entry.py" watch BBCA --until 15:30    # one line per closed bar, stops on the trigger
 python "<skill-dir>/entry.py" watchlist                   # every hit in trader/watchlist.json
 ```
 
 Other flags: `--or-minutes N` (default 15), `--json`, `--offline FILE` (a
 saved Yahoo chart JSON, `.json` or `.json.gz`, or a folder of
-`<TICKER>.json`), `--now "2026-10-19 10:15"` (WIB) to replay a day.
+`<TICKER>.json`), `--now "2026-11-23 10:15"` (WIB) to replay a day.
 `watch` with `--now` or `--offline` runs on a simulated clock and replays the
 day bar by bar without waiting.
 
@@ -53,25 +53,26 @@ day bar by bar without waiting.
 ## The rule
 
 - **Opening range (orb).** The high and low of the first 15 minutes: the
-  9:30, 9:35 and 9:40 five-minute bars, or fifteen 1-minute bars. The level
-  to beat is the range high.
+  09:00, 09:05 and 09:10 WIB five-minute bars, or fifteen 1-minute bars. The
+  level to beat is the range high.
 - **Level.** A price you give, like a 20-day high from `/trader-scanner`.
 - **The trigger** is the first completed bar after the range that CLOSES
   above the level. A wick above is not a trigger. A close exactly at the
   level is not above it.
 - **The time** is that bar's close time (the 09:30 bar closes at 09:35 WIB).
-  The price is its close, to the cent.
+  The price is its close, on a valid IDX tick.
 - **Only closed bars count.** A bar is closed when the clock passes its start
   plus 5 (or 1) minutes and Yahoo has caught up to that moment (it waits a
   minute at most). Yahoo's live tick, like 10:49:45, is never a bar.
 - **Volume, if you want it.** `--min-volume-x 1.5` also needs the trigger
-  bar's volume at 1.5 times the range bars' average. The 9:30 bar holds the
-  opening auction, so 1.0 is already strict.
-- **Time limits.** No entries before 9:45 or after 15:30 (config). On a 1:00
-  p.m. early close the cutoff moves up with the close, to 12:30.
+  bar's volume at 1.5 times the range bars' average.
+- **Time limits.** No entries before `no_entries_before` (09:15 WIB), during
+  the lunch break (Mon-Thu 12:00-13:30, Fri 11:30-14:00 WIB), or after
+  `no_entries_after` (15:30 WIB).
 - **What it says.** Waiting (and how far the last close is from the level),
-  triggered, expired, or no data. Before 9:30: not open yet. Before 9:45: the
-  range is still forming. Weekends and IDX holidays: the market is closed.
+  triggered, expired, or no data. Before 09:00 WIB: not open yet. Before 09:15
+  WIB: the range is still forming. Weekends and IDX holidays: the market is
+  closed.
 
 ## Steps
 
@@ -91,21 +92,21 @@ day bar by bar without waiting.
 5. Hand off to `/trader-exit` to set the stop and the target BEFORE anything
    is bought.
 
-## Example: the reel
+## Example
 
-TSLA, Monday 2026-10-19, 5-minute bars. The opening range is 354.47 to
-362.18. At 10:12 the 10:10 bar is still open, so it waits:
+BBCA, Monday 2026-11-23, 5-minute bars. The opening range (09:00-09:15 WIB) is
+Rp 5.425 to Rp 5.500. While the 09:30 bar is still forming, it waits:
 
 ```
-WAITING  last close $361.68 (10:05 bar), $0.50 under the range high $362.18 (-0.14%).
+WAITING  last close Rp 5.475 (09:25 bar), Rp 25 under the range high Rp 5.500 (-0.45%).
 The 09:30 bar is still forming (Rp 5.550 so far, closes 09:35 WIB); it does not count until it closes.
 ```
 
-At 10:15 the bar has closed:
+At 09:35 WIB the bar has closed:
 
 ```
-BBCA.JK  Mon 2026-11-23 09:35 WIB  opening-range breakout (15-minute range) on 5-minute bars (Yahoo, free, can lag)
-Opening range 9:30-9:45: high $362.18, low $354.47 (3 of 3 bars).
+BBCA  Mon 2026-11-23 09:35 WIB  opening-range breakout (15-minute range) on 5-minute bars (Yahoo, free, can lag)
+Opening range 09:00-09:15: high Rp 5.500, low Rp 5.425 (3 of 3 bars).
 TRIGGERED 09:35 WIB at Rp 5.550: the 09:30 bar (bar 6) closed above the range high Rp 5.500 (+0.91%).
 This is the moment to get in, if you take the trade. Nothing was placed.
 Next: set the stop and target BEFORE you buy: /trader-exit (exit.py plan --from trader/entry.json).
@@ -141,4 +142,4 @@ watch: nobody is there to say yes.
   user approved the agent's own permission prompt because the order tool is set to `ask` in Antigravity
   permissions. Never set an order tool to `allow`.
 - No options, margin, short selling or leverage unless the config allows it and the user confirms.
-- Broker keys live in environment variables or `~/.gemini/config/mcp_config.json`, never in the chat.
+- Broker keys live in environment variables, never in the chat.

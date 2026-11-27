@@ -32,7 +32,7 @@ keep each loss and each day's losses small. They do not make a trade win.
 python "<skill-dir>/check.py"                           # trader/ files; writes trader/state/risk.json
 python "<skill-dir>/check.py" --json
 python "<skill-dir>/check.py" --no-write                # look without recording
-python "<skill-dir>/check.py" --now "2026-10-19 10:15"  # pin the clock (WIB)
+python "<skill-dir>/check.py" --now "2026-11-23 10:15"  # pin the clock (WIB)
 ```
 
 ## What it reads and writes
@@ -62,16 +62,16 @@ batch that is fine order by order but breaks a limit together is caught.
 | check | blocks when |
 | --- | --- |
 | format | no symbol, side not buy or sell, both or neither of qty and notional, a notional order that is not market + day, a limit order with no limit price; a bracket that is not whole shares, not `day` or `gtc`, or misses its stop-loss or take-profit |
-| asset | an option symbol while `allow_options` is false; crypto or anything that is not a US stock or ETF ticker |
+| asset | an option symbol while `allow_options` is false; crypto or anything that is not an IDX stock ticker |
 | short | a sell of more than you hold (`allow_short` false) |
 | blocked | (entries) the ticker is on the `blocked` list |
-| size | (entries) under `min_order_usd` or over `max_order_usd` |
+| size | (entries) under `min_order` or over `max_order` |
 | position | (entries) the stock would be over `max_position_pct` of the account |
 | cash | (entries) the buy would leave less than the cash buffer, or need margin |
 | stop | (entries) no stop while `require_stop` is true (a bracket `stop_loss_stop_price`, or the order's plan stop); a stop on the wrong side of the entry |
-| loss | (entries) qty x (entry minus stop) over `max_loss_per_trade_usd` |
+| loss | (entries) qty x (entry minus stop) plus fees over `max_loss_per_trade` |
 | reward:risk | (entries) (target minus entry) / (entry minus stop) under `min_reward_risk` |
-| daily loss | (entries) the max losses at the stops of today's entries, plus this one, over `max_daily_loss_usd` |
+| daily loss | (entries) the max losses at the stops of today's entries, plus this one, over `max_daily_loss` |
 | trades | (entries) `max_trades_per_day` entries already placed today |
 | window | (entries) before `no_entries_before` or after `no_entries_after`, or the market is closed |
 | duplicate | same symbol, same side, already in `open_orders` |
@@ -86,10 +86,11 @@ How the numbers work:
   understate the risk at 10:55 after the price ran up. An older price is not
   used, and it says so.
 - **Daily loss** counts the full max loss of every entry placed today, win or
-  lose, as trader-broker logged it. Three full-size trades use up a $150 day.
-- **The window** is WIB (Asia/Jakarta), worked out in the tool, never from the computer's clock zone. Weekends and IDX holidays
-  are closed. On a 1:00 p.m. early close the window ends 3 hours earlier too.
-  Set both `no_entries_*` to null to switch the window off.
+  lose, as trader-broker logged it. Three full-size trades use up a Rp 300.000
+  daily loss limit.
+- **The window** is WIB (Asia/Jakarta), worked out in the tool, never from the
+  computer's clock zone. Weekends and IDX holidays are closed. Set both
+  `no_entries_*` to null to switch the window off.
 - **No short / no margin** by default for IDX stocks.
 
 Warnings do not block, but say them to the user: a LIVE account, a number
@@ -111,35 +112,32 @@ not at the broker, a price too old to use, an early close today.
    each order to its verdict by fingerprint, so an edited order is not ready
    until it passes again, and a verdict from yesterday does not count today.
 
-## Example: the reel
+## Example
 
 The BBCA bracket from trader-budget at 09:35 WIB on Monday 2026-11-23, on a
-fresh $5,000 paper account with the example config:
+fresh Rp 10.000.000 paper account with the example config:
 
 ```
-PASS  #1 buy TSLA 8 shares, entry
-          entry 364.18 (the plan's entry), stop 358.32, target 370.04: risk 5.86 a share
-          max loss $46.88 (limit $50), reward:risk 1.00 (min 1)
-          today before this: 0 of 3 trades, $0 of $150 daily loss
+PASS  #1 buy BBCA 7 lots (700 shares), entry
+          entry Rp 9.875 (the plan's entry), stop Rp 9.775, target Rp 9.975: risk Rp 100 a share
+          max loss Rp 97.510 (limit Rp 100.000), reward:risk 1.00 (min 1)
+          today before this: 0 of 3 trades, Rp 0 of Rp 300.000 daily loss
 
-1 passed, 0 blocked at 2026-10-19 10:15 WIB. Cash after the passed orders: Rp 10,000,000 (paper account).
+1 passed, 0 blocked at 2026-11-23 09:35 WIB. Cash after the passed orders: Rp 10.000.000 (paper account).
 ```
 
-One more share and it is blocked:
+One more lot and it is blocked:
 
 ```
-BLOCK #1 buy TSLA 9 shares, entry
-          entry 364.18 (the plan's entry), stop 358.32, target 370.04: risk 5.86 a share
-          max loss $52.74 (limit $50), reward:risk 1.00 (min 1)
-          today before this: 0 of 3 trades, $0 of $150 daily loss
-        - loss: 9 shares x 5.86 risk a share = $52.74 at the stop, over your $50 max loss per trade
+BLOCK #1 buy BBCA 8 lots (800 shares), entry
+          entry Rp 9.875 (the plan's entry), stop Rp 9.775, target Rp 9.975: risk Rp 100 a share
+          max loss Rp 111.440 (limit Rp 100.000), reward:risk 1.00 (min 1)
+          today before this: 0 of 3 trades, Rp 0 of Rp 300.000 daily loss
+        - loss: Rp 111.440 at the stop (incl. fees), over your Rp 100.000 max loss per trade
 ```
 
-The same 8 shares checked at 10:55 with the real 10:52 quote (366.48) in
-`trader/prices.json` are blocked twice: 8 x 8.16 = $65.28 at the stop, and
-reward:risk 0.44. At 9:40 they are blocked by the window (no new entries
-before 09:15). The 15:45 WIB sell that closes the position passes, even though
-it is after the 3:30 entry cutoff: it is an exit.
+The 15:45 WIB sell that closes the position passes, even though it is after
+the 15:30 WIB entry cutoff: it is an exit.
 
 ## Rules
 

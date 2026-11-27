@@ -4,8 +4,8 @@ description: >-
   Exit Planner. Sets your stop and your target before you enter, so you know
   when to get out. Reads the entry from trader-entry (or a price you give),
   puts the stop at the opening-range midpoint by default (or the range low,
-  your price, a percent, or a multiple of the ATR), rounds it down to the
-  cent, and sets the target at 2R (or 1R, or your price). Refuses a stop at or
+  your price, a percent, or a multiple of the ATR), rounds it down to a
+  valid IDX tick, and sets the target at 2R (or 1R, or your price). Refuses a stop at or
   above the entry, a target at or below it, or a stop too tight to survive the
   spread, and says why. Writes trader/plan.json for the Time Machine, the
   Budget Manager and Price Alerts. Long side only. Use when the user says
@@ -30,20 +30,20 @@ and a neat plan does not change that.
 python "<skill-dir>/exit.py" plan                          # trader/entry.json: midpoint stop, 2R target
 python "<skill-dir>/exit.py" plan --stop or-mid --target 1R --write
 python "<skill-dir>/exit.py" plan --stop atr:1.5           # needs the session's bars (Yahoo or --offline)
-python "<skill-dir>/exit.py" plan --symbol TSLA --entry 364.18 --or-high 362.18 --or-low 354.47
+python "<skill-dir>/exit.py" plan --symbol BBCA --entry 9875 --or-high 9850 --or-low 9700
 python "<skill-dir>/exit.py" show                          # the current trader/plan.json
 ```
 
-Other flags: `--flat-by 15:55`, `--json`, `--now "2026-10-19 10:15"` (New
-York time), `--entry PRICE` with a waiting entry.json to plan ahead, `--setup
-level`, `--offline FILE` (a saved Yahoo chart JSON for an ATR stop).
+Other flags: `--flat-by 15:45`, `--json`, `--now "2026-11-23 09:35"` (WIB),
+`--entry PRICE` with a waiting entry.json to plan ahead, `--setup level`,
+`--offline FILE` (a saved Yahoo chart JSON for an ATR stop).
 
 ## What it reads and writes
 
 | file | what |
 | --- | --- |
 | `trader/entry.json` | the trigger from trader-entry: symbol, entry price, time, bar, opening range |
-| `trader/config.json` | `flat_by` (15:55) and `min_reward_risk` (1.0: a note here, trader-risk enforces it) |
+| `trader/config.json` | `flat_by` (15:45) and `min_reward_risk` (1.0: a note here, trader-risk enforces it) |
 | Yahoo chart API | only for an `atr:K` stop: the session's bars up to the entry bar, free and unofficial |
 | `trader/plan.json` | with `--write`: entry, stop and its rule, target and its R, risk a share, reward:risk, flat by. trader-timemachine, trader-budget and trader-alerts read it |
 
@@ -59,16 +59,17 @@ level`, `--offline FILE` (a saved Yahoo chart JSON for an ATR stop).
 
 A level setup has no opening range to lean on, so it needs a stop you name.
 
-- **Rounding.** The stop rounds AWAY from the entry to the cent (down, for a
-  long). Risk = entry minus stop. Target = entry + R x risk, rounded half up
-  to the cent. `2R` by default; `1R`, `1.5R` or `price:X` also work.
+- **Rounding.** The stop rounds AWAY from the entry to a valid IDX tick (down,
+  for a long). Risk = entry minus stop. Target = entry + R x risk, rounded
+  half up to a valid IDX tick. `2R` by default; `1R`, `1.5R` or `price:X` also
+  work.
 - **Refused, with the reason.** A stop at or above the entry. A target at or
   below it. A risk under 0.05% of the price: too tight to survive the
   spread, normal wiggle would stop you out. An entry.json that has not
   triggered (unless you give `--entry`). A short: v2 plans longs only.
-- **Flat by.** 15:55 by default (or `flat_by` in the config). Out by then,
-  win or lose, no overnight hold. On a 1:00 p.m. early close it moves up to
-  12:55. An entry at or after the flat-by time is refused.
+- **Flat by.** 15:45 WIB by default (or `flat_by` in the config). Out by then,
+  win or lose, no overnight hold. An entry at or after the flat-by time is
+  refused.
 
 ## Steps
 
@@ -86,24 +87,23 @@ A level setup has no opening range to lean on, so it needs a stop you name.
    the target and the flat-by time. The agent can keep `entry.py watch` running
    in the background or on a `/loop` until a setup triggers, then come here.
 
-## Example: the reel
+## Example
 
-BBCA, Monday 2026-11-23. The entry is 9875 at 09:35 WIB (the 09:30 bar,
-bar 8) and the opening range is 354.47 to 362.18. `exit.py plan --stop
-or-mid --target 1R --write`:
+BBCA, Monday 2026-11-23. The entry is Rp 9.875 at 09:35 WIB (bar 6) and the
+opening range is Rp 9.700 to Rp 9.850. `exit.py plan --stop or-mid --target 1R --write`:
 
 ```
-Exit plan: TSLA long, Mon 2026-10-19, opening-range breakout on 5-minute bars
+Exit plan: BBCA long, Mon 2026-11-23, opening-range breakout on 5-minute bars
   Entry         Rp 9.875 at 09:35 WIB (bar 6)
-  Stop          $358.32  opening-range midpoint: ($362.18 + $354.47) / 2 = $358.325, rounded down
-  Target        $370.04  1R (one times the risk)
-  Risk a share  $5.86 (1.61% of the entry)
+  Stop          Rp 9.775  opening-range midpoint: (9.850 + 9.700) / 2 = Rp 9.775
+  Target        Rp 9.975  1R (one times the risk)
+  Risk a share  Rp 100 (1.01% of the entry)
   Reward:risk   1.0
   Flat by       15:45 WIB, win or lose: no overnight hold
 ```
 
-The default 2R target would be 364.18 + 2 x 5.86 = 375.90. trader-budget then
-sizes it: a $50 max loss per trade buys floor(50 / 5.86) = 8 shares.
+The default 2R target would be 9.875 + 2 x 100 = Rp 10.075. trader-budget then
+sizes it in 100-share lots within your max loss per trade.
 
 ## Rules
 
