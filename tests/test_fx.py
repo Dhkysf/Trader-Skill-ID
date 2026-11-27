@@ -16,6 +16,10 @@ scan = load("trader-scanner", "scan")
 entry = load("trader-entry", "entry")
 exit_mod = load("trader-exit", "exit")
 alerts = load("trader-alerts", "alerts")
+size_mod = load("trader-budget", "size")
+check_mod = load("trader-risk", "check")
+ticket_mod = load("trader-broker", "ticket")
+tm_mod = load("trader-timemachine", "timemachine")
 
 FX_DIR = os.path.join(ROOT, "tests", "fixtures", "fx")
 EURUSD_GZ = os.path.join(FX_DIR, "EURUSD=X-5m-60d-2026-11-27.json.gz")
@@ -263,6 +267,159 @@ class FxCliTest(unittest.TestCase):
         self.assertIn("short", r.stdout)
         self.assertNotIn("closed above their opening-range high", r.stdout)
         self.assertNotIn("% over", r.stdout)
+
+
+class FxPipelineTest(unittest.TestCase):
+    def setUp(self):
+        self.fx = market.load("fx")
+        with open(os.path.join(ROOT, "skills", "trader-budget", "config.fx.example.json"), encoding="utf-8") as fh:
+            self.cfg = json.load(fh)
+
+    def test_pip_values_and_missing_usdidr(self):
+        from decimal import Decimal
+        self.assertEqual(market.pip_value(self.fx, "EURUSD", 1.08350, "IDR", 16000), Decimal("160000"))
+        self.assertEqual(market.pip_value(self.fx, "USDJPY", 150.000, "IDR", 16000),
+                         Decimal("1000") / Decimal("150") * Decimal("16000"))
+        self.assertEqual(market.pip_value(self.fx, "USDCAD", 1.40000, "IDR", 16000),
+                         Decimal("10") / Decimal("1.4") * Decimal("16000"))
+        self.assertEqual(market.pip_value(self.fx, "USDIDR", 16000.0, "IDR"), Decimal("100000"))
+        with self.assertRaises(ValueError) as ctx:
+            market.pip_value(self.fx, "EURUSD", 1.08350, "IDR", None)
+        self.assertIn("need a USDIDR quote", str(ctx.exception))
+
+    def test_lot_sizing_idr_and_usd_and_below_min(self):
+        # EURUSD IDR: 500,000 / ((25 + 1) * 160,000) = 0.1201 -> 0.12 lot
+        plan_eu = {"market": "fx", "symbol": "EURUSD", "side": "sell", "date": "2026-11-26",
+                   "entry": 1.08350, "stop": 1.08600, "target": 1.07850, "setup": "orb"}
+        s_eu = size_mod.size_trade(plan_eu, dict(self.cfg, budget=25000000), usdidr=16000)
+        self.assertEqual(s_eu["lots"], 0.12)
+        self.assertEqual(s_eu["max_loss"], 499200.0)
+
+        # USDJPY IDR: 500,000 / ((25 + 1) * (1000/150 * 16000)) = 0.1802 -> 0.18 lot
+        plan_jy = {"market": "fx", "symbol": "USDJPY", "side": "buy", "date": "2026-11-26",
+                   "entry": 150.000, "stop": 149.750, "target": 150.500, "setup": "orb"}
+        s_jy = size_mod.size_trade(plan_jy, dict(self.cfg, budget=30000000), usdidr=16000)
+        self.assertEqual(s_jy["lots"], 0.18)
+
+        # EURUSD USD account: $50 / ((25 + 1) * $10) = 0.1923 -> 0.19 lot
+        cfg_usd = dict(self.cfg, account_currency="USD", budget=3000, max_loss_per_trade=50)
+        s_usd = size_mod.size_trade(plan_eu, cfg_usd)
+        self.assertEqual(s_usd["lots"], 0.19)
+
+        # Below 0.01 lot -> refusal
+        cfg_tiny = dict(self.cfg, max_loss_per_trade=10000)
+        s_tiny = size_mod.size_trade(plan_eu, cfg_tiny, usdidr=16000)
+        self.assertEqual(s_tiny["lots"], 0.0)
+        self.assertIsNotNone(s_tiny["refusal"])
+
+    def _fx_order(self, qty="0.12", stop="1.08600", side="sell", entry=1.08350, target="1.07850"):
+        o = {"symbol": "EURUSD", "side": side, "qty": qty, "type": "market", "time_in_force": "day",
+             "market": "fx", "order_class": "bracket", "take_profit_limit_price": target,
+             "plan": {"entry": entry, "stop": float(stop) if stop else None, "target": float(target),
+                      "stop_pips": 25.0, "target_pips": 50.0, "spread_pips": 1.0, "account_currency": "IDR"}}
+        if stop is not None:
+            o["stop_loss_stop_price"] = stop
+        return o
+
+    def test_risk_fx_every_block_reason(self):
+        now_open = market.local_to_utc(self.fx, datetime.datetime(2026, 11, 26, 10, 0))
+        # 1. No stop
+        r1 = check_mod.check([self._fx_order(stop=None)], self.cfg, now=now_open, usdidr=16000)
+        self.assertTrue(any("stop:" in x for x in r1["results"][0]["reasons"]))
+        # 2. Max loss incl. spread over limit (0.13 lot -> 540,800 > 500,000)
+        r2 = check_mod.check([self._fx_order(qty="0.13")], self.cfg, now=now_open, usdidr=16000)
+        self.assertTrue(any("loss:" in x for x in r2["results"][0]["reasons"]))
+        # 3. Lots above max_lots
+        r3 = check_mod.check([self._fx_order(qty="1.50")], self.cfg, now=now_open, usdidr=16000)
+        self.assertTrue(any("lots:" in x for x in r3["results"][0]["reasons"]))
+        # 4. Effective leverage above max_leverage (0.12 lot = 208M > 10 * 20M = 200M)
+        r4 = check_mod.check([self._fx_order(qty="0.12")], self.cfg, now=now_open, usdidr=16000)
+        self.assertTrue(any("leverage:" in x for x in r4["results"][0]["reasons"]))
+        # 5. After no_entries_after (16:31 ET)
+        now_late = market.local_to_utc(self.fx, datetime.datetime(2026, 11, 26, 16, 31))
+        r5 = check_mod.check([self._fx_order(qty="0.05")], self.cfg, now=now_late, usdidr=16000)
+        self.assertTrue(any("window:" in x for x in r5["results"][0]["reasons"]))
+        # 6. Market closed (Saturday)
+        now_sat = market.local_to_utc(self.fx, datetime.datetime(2026, 11, 28, 12, 0))
+        r6 = check_mod.check([self._fx_order(qty="0.05")], self.cfg, now=now_sat, usdidr=16000)
+        self.assertTrue(any("window:" in x for x in r6["results"][0]["reasons"]))
+        # 7. Short disallowed
+        r7 = check_mod.check([self._fx_order(qty="0.05")], dict(self.cfg, allow_short=False), now=now_open, usdidr=16000)
+        self.assertTrue(any("short:" in x for x in r7["results"][0]["reasons"]))
+        # 8. Margin disallowed
+        r8 = check_mod.check([self._fx_order(qty="0.05")], dict(self.cfg, allow_margin=False), now=now_open, usdidr=16000)
+        self.assertTrue(any("margin:" in x for x in r8["results"][0]["reasons"]))
+        # 9. Missing USDIDR
+        r9 = check_mod.check([self._fx_order(qty="0.05")], self.cfg, now=now_open)
+        self.assertTrue(any("need a USDIDR quote" in x for x in r9["results"][0]["reasons"]))
+
+    def test_fx_ticket_and_parse_yes(self):
+        o = self._fx_order(qty="0.12")
+        o["plan"]["max_loss"] = 499200.0
+        txt = ticket_mod.plain(o, p=self.fx, cfg=self.cfg)
+        self.assertIn("SELL 0.12 lot EURUSD at 1.08350, stop 1.08600 (25 pips), target 1.07850 (50 pips)", txt)
+        self.assertIn("Enter it on your broker platform yourself.", txt)
+        self.assertTrue(ticket_mod.parse_yes("yes", o, p=self.fx, cfg=self.cfg)[0])
+        self.assertTrue(ticket_mod.parse_yes("yes 0.12 lot", o, p=self.fx, cfg=self.cfg)[0])
+        ok, why = ticket_mod.parse_yes("yes GBPUSD", o, p=self.fx, cfg=self.cfg)
+        self.assertFalse(ok)
+        self.assertIn("GBPUSD", why)
+
+    def test_fx_cli_end_to_end_flow(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "trader"), exist_ok=True)
+            cfg = dict(self.cfg, budget=25000000)
+            with open(os.path.join(d, "trader", "config.json"), "w", encoding="utf-8") as fh:
+                json.dump(cfg, fh)
+            with open(os.path.join(d, "trader", "prices.json"), "w", encoding="utf-8") as fh:
+                json.dump({"as_of": "2026-11-26T15:00:00Z", "prices": {"USDIDR": 16000}}, fh)
+            plan = {"market": "fx", "symbol": "EURUSD", "side": "sell", "date": "2026-11-26",
+                    "entry": 1.08350, "stop": 1.08600, "target": 1.07850, "setup": "orb"}
+            with open(os.path.join(d, "trader", "plan.json"), "w", encoding="utf-8") as fh:
+                json.dump(plan, fh)
+
+            def run(skill, script, args):
+                return subprocess.run([sys.executable, os.path.join(ROOT, "skills", skill, script)] + args,
+                                      cwd=d, capture_output=True, text=True)
+
+            r_sz = run("trader-budget", "size.py", ["--now", "2026-11-26 10:00", "--write"])
+            self.assertEqual(r_sz.returncode, 0, r_sz.stderr)
+            r_rk = run("trader-risk", "check.py", ["--now", "2026-11-26 10:00"])
+            self.assertEqual(r_rk.returncode, 0, r_rk.stderr)
+            r_sh = run("trader-broker", "ticket.py", ["show", "--now", "2026-11-26 10:00"])
+            self.assertEqual(r_sh.returncode, 0, r_sh.stderr)
+            self.assertIn("SELL 0.12 lot EURUSD", r_sh.stdout)
+            r_ap = run("trader-broker", "ticket.py", ["approve", "--index", "1", "--reply", "yes 0.12 lot", "--now", "2026-11-26 10:00"])
+            self.assertEqual(r_ap.returncode, 0, r_ap.stderr)
+            r_f1 = run("trader-broker", "ticket.py", ["fill", "--symbol", "EURUSD", "--side", "sell", "--qty", "0.12", "--price", "1.08350", "--now", "2026-11-26 10:00"])
+            self.assertEqual(r_f1.returncode, 0, r_f1.stderr)
+            with open(os.path.join(d, "trader", "portfolio.json"), encoding="utf-8") as fh:
+                pf1 = json.load(fh)
+            self.assertEqual(pf1["cash"], 25000000.0)
+            # Close 50 pips in profit minus 1 pip spread = 49 pips * 160,000 * 0.12 = +940,800 IDR
+            r_f2 = run("trader-broker", "ticket.py", ["fill", "--symbol", "EURUSD", "--side", "buy", "--qty", "0.12", "--price", "1.07850", "--now", "2026-11-26 11:00"])
+            self.assertEqual(r_f2.returncode, 0, r_f2.stderr)
+            with open(os.path.join(d, "trader", "portfolio.json"), encoding="utf-8") as fh:
+                pf2 = json.load(fh)
+            self.assertEqual(pf2["cash"], 25940800.0)
+            self.assertEqual(pf2["positions"], [])
+
+    def test_fx_timemachine_24h_short_reproducible(self):
+        with gzip.open(EURUSD_GZ, "rt", encoding="utf-8") as fh:
+            text = fh.read()
+        now_utc = market.local_to_utc(self.fx, datetime.datetime(2026, 11, 26, 17, 0))
+        plan = tm_mod.normalize_plan({
+            "market": "fx", "symbol": "EURUSD", "side": "sell", "date": "2026-11-26",
+            "entry": 1.05500, "stop": 1.05750, "target": 1.05000, "entry_time": "03:20 AM",
+            "setup": "orb", "opening_range": {"minutes": 15}, "flat_by": "16:45",
+        }, p=self.fx)
+        doc1 = tm_mod.time_machine(text, plan, now_utc, replays=200, seed=19, p=self.fx)
+        doc2 = tm_mod.time_machine(text, plan, now_utc, replays=200, seed=19, p=self.fx)
+        self.assertEqual(doc1["mc"], doc2["mc"])
+        self.assertEqual(doc1["mc"]["until"], "16:45")
+        self.assertNotIn("ar_band", doc1["mc"])
+        self.assertEqual(tm_mod.slot_map(self.fx, "2026-11-26")["total"], 288)
+        self.assertEqual(tm_mod.slot_map(self.fx, "2026-11-28")["total"], 0)
 
 
 if __name__ == "__main__":

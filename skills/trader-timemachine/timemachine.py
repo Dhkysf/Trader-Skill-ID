@@ -111,8 +111,21 @@ def _place_label(p=None):
     return _tz_label(p)
 
 
-def _px(x, p=None):
-    return market.price(p or _IDX, x)
+def _px(x, p=None, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
+
+
+def _has_overnight(p):
+    raw = (p or {}).get("sessions") or {}
+    return any(c <= o for spans in raw.values() for o, c in spans)
+
+
+def _session_close_min(sm, clock_min):
+    if clock_min in sm["by_close"]:
+        return clock_min
+    if clock_min + 1440 in sm["by_close"]:
+        return clock_min + 1440
+    return None
 
 
 def _delay_notice(p=None):
@@ -124,12 +137,12 @@ def _delay_notice(p=None):
     return None
 
 
-def _tick_away(p, x, long):
-    return float(market.round_tick(p or _IDX, x, "down" if long else "up"))
+def _tick_away(p, x, long, symbol=None):
+    return float(market.round_tick(p or _IDX, x, "down" if long else "up", symbol=symbol))
 
 
-def _tick_nearest(p, x):
-    return float(market.round_tick(p or _IDX, x, "nearest"))
+def _tick_nearest(p, x, symbol=None):
+    return float(market.round_tick(p or _IDX, x, "nearest", symbol=symbol))
 
 
 def slot_map(p, day):
@@ -144,9 +157,14 @@ def slot_map(p, day):
     """
     prof = p or _IDX
     d = datetime.date.fromisoformat(day) if isinstance(day, str) else day
-    wd = market._WEEKDAYS[d.weekday()]
-    raw = prof["sessions"].get(wd) or []
-    cache_key = tuple(tuple(w) for w in raw)
+    if _has_overnight(prof):
+        windows = market.trading_day_window(prof, d) or market.session_windows(prof, d)
+        raw = [(so.strftime("%H:%M"), sc.strftime("%H:%M")) for so, sc in windows]
+        cache_key = (prof.get("id"), tuple(raw), len(windows))
+    else:
+        wd = market._WEEKDAYS[d.weekday()]
+        raw = prof["sessions"].get(wd) or []
+        cache_key = tuple(tuple(w) for w in raw)
     if cache_key in _SLOT_CACHE:
         return _SLOT_CACHE[cache_key]
     step_min = INTERVAL // 60
@@ -233,12 +251,12 @@ def parse_clock(text, what, p=None):
 
 
 def clock12(minutes):
-    h, m = divmod(minutes, 60)
+    h, m = divmod(minutes % 1440, 60)
     return "%d:%02d %s" % (h % 12 or 12, m, "AM" if h < 12 else "PM")
 
 
 def clock24(minutes):
-    return "%02d:%02d" % divmod(minutes, 60)
+    return "%02d:%02d" % divmod(minutes % 1440, 60)
 
 
 # ---------------------------------------------------------------- data
@@ -386,14 +404,23 @@ def parse_bars(result, now_utc, p=None):
             continue
         start = utc_of(ts)
         local = market.to_local(prof, start)
-        slot_idx = slot_map(prof, local.date())["by_min"].get(local.hour * 60 + local.minute)
-        if slot_idx is None:
-            dropped["outside_hours"] += 1
-            continue
+        if _has_overnight(prof):
+            w = market.active_session_window(prof, local)
+            if w is None:
+                dropped["outside_hours"] += 1
+                continue
+            tday = w[1].date().isoformat()
+            slot_idx = int((local - w[0]).total_seconds()) // INTERVAL
+        else:
+            tday = local.date().isoformat()
+            slot_idx = slot_map(prof, local.date())["by_min"].get(local.hour * 60 + local.minute)
+            if slot_idx is None:
+                dropped["outside_hours"] += 1
+                continue
         if start + datetime.timedelta(seconds=INTERVAL) > as_of:
             dropped["not_complete"] += 1
             continue
-        bars[ts] = {"date": local.date().isoformat(), "slot": slot_idx, "start": local.strftime("%H:%M"),
+        bars[ts] = {"date": tday, "slot": slot_idx, "start": local.strftime("%H:%M"),
                     "o": o, "h": h, "l": l, "c": c, "v": v or 0}
     return meta, [bars[t] for t in sorted(bars)], dropped
 
@@ -562,17 +589,17 @@ def opening_range(D, n):
     return max(b["h"] for b in rows), min(b["l"] for b in rows)
 
 
-def rule_stop(rule, oh, ol, entry, long, p=None):
+def rule_stop(rule, oh, ol, entry, long, p=None, symbol=None):
     r = rule["stop_rule"]
     if r == "or_mid":
-        return _tick_away(p, (oh + ol) / 2, long)
+        return _tick_away(p, (oh + ol) / 2, long, symbol=symbol)
     if r in ("or_low", "or_high"):
-        return _tick_away(p, ol if long else oh, long)
+        return _tick_away(p, ol if long else oh, long, symbol=symbol)
     frac = rule["stop_pct"] / 100.0
-    return _tick_away(p, entry * (1 - frac) if long else entry * (1 + frac), long)
+    return _tick_away(p, entry * (1 - frac) if long else entry * (1 + frac), long, symbol=symbol)
 
 
-def history_replay(sessions, rule, last, side="buy", p=None, until_min=None):
+def history_replay(sessions, rule, last, side="buy", p=None, until_min=None, symbol=None):
     """The plan's rule on every past full session: entry = the first bar after the
     opening range to close beyond it (up to the --until bar), then stop first, then
     target, bar by bar, else the close at --until."""
@@ -592,12 +619,12 @@ def history_replay(sessions, rule, last, side="buy", p=None, until_min=None):
         kk = next((i for i in range(n, d_last + 1) if (D[i]["c"] > oh if long else D[i]["c"] < ol)), None)
         if kk is None:
             continue
-        e = _tick_nearest(prof, D[kk]["c"])
-        s = rule_stop(rule, oh, ol, e, long, p=prof)
+        e = _tick_nearest(prof, D[kk]["c"], symbol=symbol)
+        s = rule_stop(rule, oh, ol, e, long, p=prof, symbol=symbol)
         risk = (e - s) if long else (s - e)
         if risk <= 0:
             continue
-        t = _tick_nearest(prof, e + rule["target_r"] * risk if long else e - rule["target_r"] * risk)
+        t = _tick_nearest(prof, e + rule["target_r"] * risk if long else e - rule["target_r"] * risk, symbol=symbol)
         oc = None
         for b in D[kk + 1:d_last + 1]:
             if (b["l"] <= s) if long else (b["h"] >= s):
@@ -688,7 +715,8 @@ def normalize_plan(raw, src="flags", p=None):
         date = date_d.isoformat()
     except ValueError:
         raise TMError("the plan needs a date like 2026-10-19, got %r" % raw.get("date"))
-    if not market.is_trading_day(prof, date_d):
+    is_open_day = market.is_trading_day(prof, date_d) or (bool(market.trading_day_window(prof, date_d)) if _has_overnight(prof) else False)
+    if not is_open_day:
         ex = prof.get("exchange", "IDX")
         name = (prof.get("holidays") or {}).get(date)
         why = ("%s holiday: %s" % (ex, name)) if name else "weekend"
@@ -698,9 +726,9 @@ def normalize_plan(raw, src="flags", p=None):
         raise TMError("%s is not a trading day for %s" % (date, prof.get("exchange", "market")))
     entry, stop, target = (_num(raw.get(k), k) for k in ("entry", "stop", "target"))
     for fld, val in (("stop", stop), ("target", target)):
-        if not market.valid_tick(prof, val):
+        if not market.valid_tick(prof, val, symbol=sym):
             raise TMError("the plan's %s %s is not on a valid %s tick (tick size %s)"
-                          % (fld, val, prof.get("exchange", "IDX"), market.tick_size(prof, val)))
+                          % (fld, val, prof.get("exchange", "IDX"), market.tick_size(prof, val, symbol=sym)))
     long = side == "buy"
     if long and not stop < entry < target:
         raise TMError("a buy needs stop < entry < target (got stop %s, entry %s, target %s)" % (stop, entry, target))
@@ -713,8 +741,9 @@ def normalize_plan(raw, src="flags", p=None):
         if (close_min - open_min) % 5:
             raise TMError("entry_time %s is not on the 5-minute grid (use the bar's close, e.g. 10:15 AM)"
                           % raw["entry_time"])
-        if close_min in sm["by_close"]:
-            k = sm["by_close"][close_min]
+        mapped = _session_close_min(sm, close_min)
+        if mapped is not None:
+            k = sm["by_close"][mapped]
         else:
             raise TMError("entry_time %s is outside %s session hours on %s"
                           % (raw["entry_time"], prof.get("exchange", "market"), date))
@@ -745,7 +774,7 @@ def normalize_plan(raw, src="flags", p=None):
     if or_min < 5 or or_min % 5 or or_min >= sm["session_counts"][0] * 5:
         raise TMError("opening_range.minutes must be a multiple of 5 (got %s)" % or_min)
     risk = (entry - stop) if long else (stop - entry)
-    pdec = max(2, market.price_decimals(prof))
+    pdec = max(2, market.price_decimals(prof, symbol=sym))
     out = {
         "symbol": sym, "side": side, "date": date, "setup": str(raw.get("setup") or "orb"),
         "entry": entry, "entry_time": clock12(sm["slots"][k] + 5), "entry_bar": k,
@@ -778,10 +807,10 @@ def resolve_rule(plan, entry_day, p=None):
         rule["stop_rule"] = "pct"
         if all(i in entry_day for i in range(n)):
             oh, ol = opening_range(entry_day, n)
-            tol = float(market.price_tol(prof, plan["stop"]))
-            if abs(_tick_away(prof, (oh + ol) / 2, long) - plan["stop"]) < tol:
+            tol = float(market.price_tol(prof, plan["stop"], symbol=plan["symbol"]))
+            if abs(_tick_away(prof, (oh + ol) / 2, long, symbol=plan["symbol"]) - plan["stop"]) < tol:
                 rule["stop_rule"] = "or_mid"
-            elif abs(_tick_away(prof, ol if long else oh, long) - plan["stop"]) < tol:
+            elif abs(_tick_away(prof, ol if long else oh, long, symbol=plan["symbol"]) - plan["stop"]) < tol:
                 rule["stop_rule"] = far
     elif rule["stop_rule"] in ("or_low", "or_high") and rule["stop_rule"] != far:
         rule["stop_rule"] = "pct"
@@ -870,7 +899,9 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     if not bars:
         raise TMError("no complete 5-minute bars for %s in the data" % sym)
     k = plan["entry_bar"]
-    if not market.is_trading_day(prof, datetime.date.fromisoformat(plan["date"])):
+    plan_d = datetime.date.fromisoformat(plan["date"])
+    is_open_day = market.is_trading_day(prof, plan_d) or (bool(market.trading_day_window(prof, plan_d)) if _has_overnight(prof) else False)
+    if not is_open_day:
         ex = prof.get("exchange", "IDX")
         name = (prof.get("holidays") or {}).get(plan["date"])
         why = ("%s holiday: %s" % (ex, name)) if name else "weekend"
@@ -879,14 +910,26 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     if sm["total"] == 0:
         raise TMError("%s is not a trading day for %s" % (plan["date"], prof.get("exchange", "market")))
     full_end_min = sm["slots"][-1] + 5
-    sess_today = market.sessions(prof, datetime.date.fromisoformat(plan["date"]))
-    if sess_today:
-        end_min = sess_today[-1][1].hour * 60 + sess_today[-1][1].minute
-        early = end_min < full_end_min
-    else:
+    if _has_overnight(prof):
         end_min = full_end_min
         early = False
-    until_min = end_min if until is None else parse_clock(until, "--until", p=prof)
+        if until is None:
+            until = plan.get("flat_by") or (prof.get("defaults") or {}).get("flat_by")
+    else:
+        sess_today = market.sessions(prof, plan_d)
+        if sess_today:
+            end_min = sess_today[-1][1].hour * 60 + sess_today[-1][1].minute
+            early = end_min < full_end_min
+        else:
+            end_min = full_end_min
+            early = False
+    if until is None:
+        until_min = end_min
+    else:
+        raw_until = parse_clock(until, "--until", p=prof)
+        until_min = _session_close_min(sm, raw_until)
+        if until_min is None:
+            until_min = raw_until
     if (until_min - sm["slots"][0]) % 5 or until_min > end_min:
         raise TMError("--until must be on the 5-minute grid and no later than %s%s"
                       % (clock12(end_min), " (an early close)" if early else ""))
@@ -911,10 +954,10 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     )
     if cal_note:
         warn.append(cal_note)
-    tol = float(market.price_tol(prof, plan["entry"])) * 2
+    tol = float(market.price_tol(prof, plan["entry"], symbol=sym)) * 2
     if not eb["l"] - tol <= plan["entry"] <= eb["h"] + tol:
         warn.append("the plan's entry %s is outside that bar's range %s to %s"
-                    % (_px(plan["entry"], prof), _px(eb["l"], prof), _px(eb["h"], prof)))
+                    % (_px(plan["entry"], prof, sym), _px(eb["l"], prof, sym), _px(eb["h"], prof, sym)))
     sessions, short = full_sessions(days, plan["date"], p=prof)
     if len(sessions) < MIN_SESSIONS:
         raise TMError("only %d full session(s) of %s before %s in the data; the time machine needs at least %d"
@@ -941,7 +984,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
             ar_band = (float(lo_d), float(hi_d))
     mc = simulate(pool, plan["entry"], plan["stop"], plan["target"], k, last, replays, seed, window,
                   plan["side"], slot_info=sm, ar_band=ar_band,
-                  price_decimals=max(2, market.price_decimals(prof)))
+                  price_decimals=max(2, market.price_decimals(prof, symbol=sym)))
     mc = dict(mc, until=clock24(until_min), pool_sessions=len(sessions), pool_from=sessions[0][0],
               pool_to=sessions[-1][0],
               band_times=[clock24(sm["slots"][j] + 5) for j in range(k, last + 1)])
@@ -951,7 +994,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     plan_out = {kk: v for kk, v in plan.items() if v is not None}
     if rule:
         plan_out["stop_rule"] = rule["stop_rule"]
-        history = history_replay(sessions, rule, last, plan["side"], p=prof, until_min=until_min)
+        history = history_replay(sessions, rule, last, plan["side"], p=prof, until_min=until_min, symbol=sym)
     else:
         history = {"sessions": len(sessions), "triggered": 0, "rule": None, "trades": [],
                    "note": "skipped: the history replay knows the opening-range breakout (orb) only, "
@@ -995,8 +1038,9 @@ def report(doc):
     r = p["target_r"]
     lines = [
         "%s %s, %s %s: entry %s at %s (bar %d), stop %s, target %s (%sR, risk %s a share)."
-        % (p["symbol"], p["side"], wd, p["date"], _px(p["entry"], prof), p["entry_time"], p["entry_bar"],
-           _px(p["stop"], prof), _px(p["target"], prof), ("%g" % r), _px(p["risk_per_share"], prof)),
+        % (p["symbol"], p["side"], wd, p["date"], _px(p["entry"], prof, p["symbol"]), p["entry_time"], p["entry_bar"],
+           _px(p["stop"], prof, p["symbol"]), _px(p["target"], prof, p["symbol"]), ("%g" % r),
+           _px(p["risk_per_share"], prof, p["symbol"])),
         "%s replays of the rest of the session, %s to %s (%d five-minute bars), seed %d."
         % ("{:,}".format(m["replays"]), p["entry_time"], until, m["bars_left"], m["seed"]),
         "Each bar is drawn whole from %s's own 5-min bars at the same time of day (+-%d bars) over its last "
@@ -1009,9 +1053,10 @@ def report(doc):
                                                                        "above" if long else "below", until),
         "",
         "  Price at %s: median %s, 90 %% of replays between %s and %s."
-        % (until, _px(m["median_close"], prof), _px(m["p5_close"], prof), _px(m["p95_close"], prof)),
+        % (until, _px(m["median_close"], prof, p["symbol"]), _px(m["p5_close"], prof, p["symbol"]),
+           _px(m["p95_close"], prof, p["symbol"])),
         "  Average R: %+.3f (R = the %s risk: %sR at the target, -1R at the stop)."
-        % (m["avg_R"], _px(p["risk_per_share"], prof), ("+%g" % m["r_at_target"]), ),
+        % (m["avg_R"], _px(p["risk_per_share"], prof, p["symbol"]), ("+%g" % m["r_at_target"]), ),
     ]
     if m.get("ar_band"):
         ab = m["ar_band"]
@@ -1051,11 +1096,11 @@ def render_chart(doc, height=17):
     """ASCII fan chart of the bands: one column per 5-min bar."""
     p, m = doc["plan"], doc["mc"]
     prof = market.load(p["market"]) if p.get("market") else _IDX
-    dec = max(2, market.price_decimals(prof))
+    dec = max(2, market.price_decimals(prof, symbol=p["symbol"]))
     bands, times = m["bands"], m["band_times"]
     lo = min([b[0] for b in bands] + [p["stop"], p["target"]])
     hi = max([b[4] for b in bands] + [p["stop"], p["target"]])
-    pad = (hi - lo) * 0.04 or float(market.price_tol(prof, hi)) * 2
+    pad = (hi - lo) * 0.04 or float(market.price_tol(prof, hi, symbol=p["symbol"])) * 2
     lo, hi = lo - pad, hi + pad
     step = (hi - lo) / (height - 1)
 
