@@ -81,4 +81,5 @@ Enter this ticket in your broker app yourself, then log the fill with:
 
 - Broker keys live in environment variables, never in the chat.
 - Always confirm each order with `"yes"` before logging a fill.
+- For forex, use only a broker licensed in Indonesia (check the official Bappebti list before depositing).
 - Not financial advice.

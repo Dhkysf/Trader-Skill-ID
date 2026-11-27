@@ -150,9 +150,24 @@ def is_bracket(order):
     return oc == "bracket" or (not oc and legs)
 
 
+def _fx_money(x, p, cfg=None):
+    if market.is_fx(p):
+        return market.money(p, x, currency=market.account_currency(p, cfg))
+    return _money(x, p)
+
+
+def _fx_px(x, p, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
+
+
 def max_loss(order, p=None, cfg=None, rv=None):
     """(amount, stop) lost if the stop fills exactly at the stop, or (None, stop)."""
-    out_dec = max(2, market.price_decimals(p))
+    is_fx = market.is_fx(p)
+    if is_fx:
+        acct_ccy = market.account_currency(p, cfg)
+        out_dec = 0 if acct_ccy == "IDR" else 2
+    else:
+        out_dec = max(2, market.price_decimals(p))
     stop = _f(order.get("stop_loss_stop_price")) or _f((order.get("plan") or {}).get("stop"))
     if rv and _f(rv.get("max_loss")) is not None:
         return round(_f(rv["max_loss"]), out_dec), _f(rv.get("stop")) or stop
@@ -187,6 +202,28 @@ def plain_parts(order, p=None, cfg=None, rv=None):
     side = str(order.get("side", "")).upper()
     sym = market.base_symbol(prof, order.get("symbol")) or "?"
     typ = str(order.get("type", "market"))
+    plan = order.get("plan") or {}
+    entry = _f(order.get("limit_price")) if typ == "limit" else _f(plan.get("entry"))
+    stop = _f(order.get("stop_loss_stop_price")) or _f(plan.get("stop"))
+    target = _f(order.get("take_profit_limit_price")) or _f(plan.get("target"))
+    if market.is_fx(prof):
+        q = _f(order.get("qty"))
+        qty_s = "%.2f lot" % q if q is not None else "? lot"
+        entry_s = ("at %s" % _fx_px(entry, prof, sym)) if entry else "at market"
+        bits = ["%s %s %s %s" % (side, qty_s, sym, entry_s)]
+        pip = float(market.pip_size(prof, sym))
+        if stop:
+            sp_pips = _f(plan.get("stop_pips")) or (abs(entry - stop) / pip if entry else None)
+            pips_s = (" (%s pips)" % _str_num(round(sp_pips, 1))) if sp_pips is not None else ""
+            bits.append("stop %s%s" % (_fx_px(stop, prof, sym), pips_s))
+        if target:
+            tp_pips = _f(plan.get("target_pips")) or (abs(target - entry) / pip if entry else None)
+            pips_s = (" (%s pips)" % _str_num(round(tp_pips, 1))) if tp_pips is not None else ""
+            bits.append("target %s%s" % (_fx_px(target, prof, sym), pips_s))
+        loss, _ = max_loss(order, p=prof, cfg=cfg, rv=rv)
+        if loss is not None:
+            bits.append("max loss incl. spread %s" % _fx_money(loss, prof, cfg))
+        return ["%s. Enter it on your broker platform yourself." % ", ".join(bits)]
     lot = int(prof.get("lot", 1))
     q = _f(order.get("qty"))
     if lot > 1 and q is not None and abs(q - round(q)) < 1e-9 and int(round(q)) % lot == 0:
@@ -270,14 +307,17 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="t
     prof = p or _IDX
     sym = market.base_symbol(prof, order.get("symbol"))
     upper4 = {market.base_symbol(prof, tok) for tok in re.findall(r"\b[A-Z]{4}(?:\.[A-Z]{2})?\b", raw)} - {sym} - UPPER_ALLOW
-    others = ({market.base_symbol(prof, s) for s in batch_symbols if s} | _universe_symbols(universe_path, prof)) - {sym}
+    upper6 = ({market.base_symbol(prof, tok) for tok in re.findall(r"\b[A-Z]{6}(?:=X)?\b", raw)} - {sym} - UPPER_ALLOW) if market.is_fx(prof) else set()
+    fx_pairs = (set(market.pair_symbols(prof)) - {sym}) if market.is_fx(prof) else set()
+    others = ({market.base_symbol(prof, s) for s in batch_symbols if s} | _universe_symbols(universe_path, prof) | fx_pairs) - {sym}
     tokens = {market.base_symbol(prof, tok)
               for tok in re.findall(r"\b[A-Za-z][A-Za-z0-9.\-]{0,8}\b", raw)
               if tok.isupper() or tok.lower() not in ORDINARY_LOWER}
-    named = (tokens & others) | upper4
+    named = (tokens & others) | upper4 | upper6
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
-    if market.price_decimals(prof) == 0:
+    pdec = market.price_decimals(prof, symbol=sym) if market.is_fx(prof) else market.price_decimals(prof)
+    if pdec == 0:
         nums = [float(n.replace(".", "").replace(",", "")) if re.match(r"^\d{1,3}(?:\.\d{3})+$", n)
                 else float(n.replace(",", ""))
                 for n in re.findall(r"\d{1,3}(?:\.\d{3})+|\d[\d,]*(?:\.\d+)?", raw)]
@@ -285,7 +325,7 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None, universe_path="t
         nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", raw)]
     if nums:
         want = amount_numbers(order, p=p, cfg=cfg, rv=rv)
-        tol = float(market.price_tol(prof))
+        tol = max(float(market.price_tol(prof, symbol=sym)), 0.005) if market.is_fx(prof) else float(market.price_tol(prof))
         bad = [n for n in nums if not any(abs(n - w) < tol for w in want)]
         if bad:
             return False, "the reply says %s, which does not match this order (%s)" % (
@@ -377,7 +417,7 @@ def ticket_json(order, idx, cfg, risk, state, today):
 
 # ---------------------------------------------------------------- fills -> portfolio
 
-def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=None):
+def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=None, usdidr=None):
     """Record a filled order in trader/portfolio.json: cash and shares, with a
     cost-basis lot per buy (fees from market.fees, config wins; buy fee goes into lot cost)."""
     pf = read_json(portfolio_path, "portfolio", required=False)
@@ -391,6 +431,44 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=
     qty, price = float(qty), float(price)
     if qty <= 0 or price <= 0:
         raise TicketError("a fill needs a positive qty and price")
+    if market.is_fx(prof):
+        acct_ccy = market.account_currency(prof, cfg)
+        positions = pf.setdefault("positions", [])
+        opp = "sell" if side == "buy" else "buy"
+        pos = next((pr for pr in positions if market.base_symbol(prof, pr.get("ticker") or pr.get("symbol")) == symbol
+                    and pr.get("lots") is not None), None)
+        if pos is not None and str(pos.get("side") or "").lower() == opp:
+            open_lots = float(pos["lots"])
+            if qty > open_lots + 1e-9:
+                raise TicketError("cannot close %.2f lot %s: only %.2f lot open" % (qty, symbol, open_lots))
+            pip = market.pip_size(prof, symbol)
+            pip_val = market.pip_value(prof, symbol, price, acct_ccy, usdidr)
+            spread = market.spread_pips(prof, symbol, cfg)
+            d_entry = market._to_decimal(pos["entry"])
+            d_exit = market._to_decimal(price)
+            pips = ((d_exit - d_entry) if opp == "buy" else (d_entry - d_exit)) / pip
+            d_lots = market._to_decimal(qty)
+            q_step = Decimal("1") if acct_ccy == "IDR" else Decimal("0.01")
+            pl = float(((pips - spread) * pip_val * d_lots).quantize(q_step, rounding=ROUND_HALF_UP))
+            if fee is not None:
+                pl -= float(fee)
+            pf["cash"] = round(float(pf.get("cash", 0)) + pl, 0 if acct_ccy == "IDR" else 2)
+            rem = round(open_lots - qty, 4)
+            if rem <= 1e-9:
+                positions.remove(pos)
+            else:
+                pos["lots"] = rem
+        elif pos is not None and str(pos.get("side") or "").lower() == side:
+            old_lots = float(pos["lots"])
+            new_lots = round(old_lots + qty, 4)
+            pos["entry"] = round((old_lots * float(pos["entry"]) + qty * price) / new_lots,
+                                 market.price_decimals(prof, symbol=symbol))
+            pos["lots"] = new_lots
+        else:
+            positions.append({"ticker": symbol, "side": side, "lots": round(qty, 4), "entry": price,
+                              "account_currency": acct_ccy, "date": date})
+        write_json(portfolio_path, pf)
+        return pf, 0.0
     if fee is None:
         pct = market.fees(p, cfg)[0 if side == "buy" else 1]
         step = Decimal("1") if (p or {}).get("currency") == "IDR" else Decimal("0.01")
@@ -440,7 +518,7 @@ def log_fill(state_path, now, today, symbol, side, qty, price, p=None, fee=None)
     state = load_state(state_path)
     prof = p or _IDX
     sym = market.base_symbol(prof, symbol)
-    px_s = _px(price, prof)
+    px_s = _fx_px(price, prof, sym) if market.is_fx(prof) else _px(price, prof)
     entry = {
         "at": local_iso(now, p=p), "date": today, "status": "filled", "symbol": sym, "side": side,
         "qty": _str_num(float(qty)), "price": float(price),
@@ -565,10 +643,14 @@ def cmd_result(a):
     write_json(a.state, state)
     print("Recorded order %d as %s." % (a.index, a.status))
     if a.status == "placed" and a.filled_qty and a.filled_price:
-        _, fee = apply_fill(a.portfolio, cfg, sym, rec["side"], a.filled_qty, a.filled_price, today, p, a.fee)
+        usdidr = getattr(a, "usdidr", None)
+        if market.is_fx(p) and usdidr is None and os.path.exists("trader/prices.json"):
+            pdoc = read_json("trader/prices.json", "prices", required=False) or {}
+            usdidr = _f((pdoc.get("prices") or {}).get("USDIDR"))
+        _, fee = apply_fill(a.portfolio, cfg, sym, rec["side"], a.filled_qty, a.filled_price, today, p, a.fee, usdidr=usdidr)
         shown = fee if (fee or a.fee is not None) else None
         log_fill(a.state, now, today, sym, rec["side"], a.filled_qty, a.filled_price, p=p, fee=shown)
-        print("Added the fill to %s%s." % (a.portfolio, (" (fee %s)" % _money(fee, p)) if shown is not None else ""))
+        print("Added the fill to %s%s." % (a.portfolio, (" (fee %s)" % _fx_money(fee, p, cfg)) if shown is not None else ""))
     elif a.status == "placed":
         print("When it fills, record it: ticket.py fill --symbol %s --side %s --qty Q --price P"
               % (sym, rec["side"]))
@@ -585,13 +667,18 @@ def cmd_fill(a):
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         raise TicketError("--date wants a date like 2026-10-19")
     sym = market.base_symbol(p, a.symbol)
-    pf, fee = apply_fill(a.portfolio, cfg, sym, a.side, a.qty, a.price, date, p, a.fee)
+    usdidr = getattr(a, "usdidr", None)
+    if market.is_fx(p) and usdidr is None and os.path.exists("trader/prices.json"):
+        pdoc = read_json("trader/prices.json", "prices", required=False) or {}
+        usdidr = _f((pdoc.get("prices") or {}).get("USDIDR"))
+    pf, fee = apply_fill(a.portfolio, cfg, sym, a.side, a.qty, a.price, date, p, a.fee, usdidr=usdidr)
     shown = fee if (fee or a.fee is not None) else None
     log_fill(a.state, now, date, sym, a.side, a.qty, a.price, p=p, fee=shown)
-    fee_s = (", fee %s" % _money(fee, p)) if shown is not None else ""
+    fee_s = (", fee %s" % _fx_money(fee, p, cfg)) if shown is not None else ""
+    px_s = _fx_px(a.price, p, sym) if market.is_fx(p) else _money(a.price, p)
     print("Recorded %s %s %s at %s on %s in %s%s. Cash now %s." % (a.side, a.qty, sym,
-                                                                  _money(a.price, p), date, a.portfolio,
-                                                                  fee_s, _money(pf["cash"], p)))
+                                                                  px_s, date, a.portfolio,
+                                                                  fee_s, _fx_money(pf["cash"], p, cfg)))
     return 0
 
 
@@ -696,6 +783,7 @@ def main(argv=None):
     p.add_argument("--filled-qty")
     p.add_argument("--filled-price")
     p.add_argument("--fee", type=float, help="the real fee from your broker app (default: from the market's fees)")
+    p.add_argument("--usdidr", type=float, help="USDIDR rate for forex IDR accounts")
     p.add_argument("--portfolio", default="trader/portfolio.json")
     p = sub.add_parser("fill", help="record a fill in trader/portfolio.json")
     p.add_argument("--symbol", required=True)
@@ -703,6 +791,7 @@ def main(argv=None):
     p.add_argument("--qty", required=True)
     p.add_argument("--price", required=True)
     p.add_argument("--fee", type=float, help="the real fee from your broker app (default: from the market's fees)")
+    p.add_argument("--usdidr", type=float, help="USDIDR rate for forex IDR accounts")
     p.add_argument("--date", help="YYYY-MM-DD (default: today in WIB)")
     p.add_argument("--now")
     p.add_argument("--portfolio", default="trader/portfolio.json")
