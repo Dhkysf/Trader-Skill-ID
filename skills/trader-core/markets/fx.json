@@ -47,12 +47,17 @@
   "liquidity_note": "Dec 25 and Jan 1: thin liquidity, wide spreads",
   "currency": "quote",
   "lot": 100000,
+  "min_lot": 0.01,
+  "lot_step": 0.01,
+  "default_spread_pips": 1.5,
   "min_price": 0,
   "fees": {
     "buy_fee_pct": 0,
     "sell_fee_pct": 0
   },
   "defaults": {
+    "account_currency": "IDR",
+    "max_leverage": 10,
     "no_entries_before": null,
     "no_entries_after": "16:30",
     "flat_by": "16:45",
@@ -64,15 +69,16 @@
     "USDIDR": {
       "pip": 1,
       "price_decimals": 4,
+      "spread_pips": 50.0,
       "note": "brokers quote USDIDR differently, check yours"
     },
-    "EURUSD": {"pip": 0.0001, "price_decimals": 5},
-    "GBPUSD": {"pip": 0.0001, "price_decimals": 5},
-    "USDJPY": {"pip": 0.01, "price_decimals": 3},
-    "AUDUSD": {"pip": 0.0001, "price_decimals": 5},
-    "USDCAD": {"pip": 0.0001, "price_decimals": 5},
-    "USDCHF": {"pip": 0.0001, "price_decimals": 5},
-    "NZDUSD": {"pip": 0.0001, "price_decimals": 5}
+    "EURUSD": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0},
+    "GBPUSD": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0},
+    "USDJPY": {"pip": 0.01, "price_decimals": 3, "spread_pips": 1.0},
+    "AUDUSD": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0},
+    "USDCAD": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0},
+    "USDCHF": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0},
+    "NZDUSD": {"pip": 0.0001, "price_decimals": 5, "spread_pips": 1.0}
   },
   "sources": {
     "ny_rollover_and_dst": {

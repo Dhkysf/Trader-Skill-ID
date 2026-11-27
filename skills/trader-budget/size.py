@@ -40,7 +40,7 @@ Money that cannot be invested is reported as "left idle", never hidden.
 
 import argparse
 import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 import json
 import math
 import os
@@ -263,8 +263,8 @@ def shares_for(usd, per_share, lot=1):
     return int(u // per) * lot_i
 
 
-def _px(x, p=None):
-    return market.price(p or _IDX, x)
+def _px(x, p=None, symbol=None):
+    return market.price(p or _IDX, x, symbol=symbol)
 
 
 def _ord_price(x, p=None):
@@ -290,7 +290,7 @@ def money(x, p=None):
 
 # ---------------------------------------------------------------- plan mode (the default)
 
-def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=None):
+def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=None, usdidr=None):
     """Pure function: one plan + your rules -> the sizing (a dict). qty may be 0.
 
     limit  the limit price for a limit order (None = market)
@@ -299,6 +299,8 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     today  market date (YYYY-MM-DD); a plan for another day is refused"""
     market_id = (cfg or {}).get("market") or (plan.get("market") if isinstance(plan, dict) else None) or "idx"
     p = market.load(market_id)
+    if market.is_fx(p):
+        return _size_fx_trade(p, plan, cfg, budget=budget, limit=limit, price=price, cash=cash, today=today, usdidr=usdidr)
     c, cfg_notices = market.merge_config(cfg, DEFAULTS, p=p)
     dec = market.price_decimals(p)
     out_dec = max(2, dec)
@@ -469,11 +471,176 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     return out
 
 
+def _size_fx_trade(p, plan, cfg, budget=None, limit=None, price=None, cash=None, today=None, usdidr=None):
+    """Size a forex trade in lots (0.01 min/step) from max loss, max lots, and max leverage."""
+    c, cfg_notices = market.merge_config(cfg, DEFAULTS, p=p)
+    if not isinstance(plan, dict):
+        raise SizeError("the plan is not a JSON object")
+    sym = market.base_symbol(p, plan.get("symbol"))
+    if not sym:
+        raise SizeError("the plan has no symbol (run trader-exit)")
+    try:
+        market.require_pair(p, sym)
+    except ValueError as e:
+        raise SizeError(str(e))
+    side = str(plan.get("side") or "buy").strip().lower()
+    if side == "short":
+        side = "sell"
+    if side not in ("buy", "sell"):
+        raise SizeError("side must be buy or sell, got %r" % side)
+    if side == "sell" and not market.allows_short(p, c):
+        raise SizeError("short selling is off (\"allow_short\": false)")
+    long = (side == "buy")
+    if today and plan.get("date") and str(plan["date"]) != today:
+        raise SizeError("the plan is for %s and today is %s (%s): make a new plan with trader-exit"
+                        % (plan["date"], today, _place_label(p)))
+    entry_plan, stop, target = _f(plan.get("entry")), _f(plan.get("stop")), _f(plan.get("target"))
+    for name, v in (("entry", entry_plan), ("stop", stop), ("target", target)):
+        if v is None or v <= 0:
+            raise SizeError("the plan needs a positive %s (run trader-exit); a bracket order needs entry, "
+                            "stop and target" % name)
+    if sym in {market.base_symbol(p, b) for b in (c.get("blocked") or [])}:
+        raise SizeError("%s is on your blocked list" % sym)
+
+    budget = float(budget if budget is not None else (c.get("budget") or 0))
+    if budget <= 0:
+        raise SizeError("no budget: pass --budget or set \"budget\" in trader/config.json")
+    if limit is not None:
+        ref, ref_from = float(limit), "limit"
+    elif price is not None and ((long and float(price) > float(entry_plan))
+                                or (not long and float(price) < float(entry_plan))):
+        ref, ref_from = float(price), "price"
+    else:
+        ref, ref_from = float(entry_plan), "plan"
+    stop, target = float(stop), float(target)
+    if long and stop >= ref:
+        raise SizeError("the stop %s is not below the entry %s; a long trade needs its stop underneath"
+                        % (_px(stop, p, sym), _px(ref, p, sym)))
+    if long and target <= ref:
+        raise SizeError("the target %s is not above the entry %s: the move has already happened. "
+                        "Skip it or make a new plan with trader-exit" % (_px(target, p, sym), _px(ref, p, sym)))
+    if not long and stop <= ref:
+        raise SizeError("the stop %s is not above the entry %s; a short trade needs its stop above"
+                        % (_px(stop, p, sym), _px(ref, p, sym)))
+    if not long and target >= ref:
+        raise SizeError("the target %s is not below the entry %s: the move has already happened. "
+                        "Skip it or make a new plan with trader-exit" % (_px(target, p, sym), _px(ref, p, sym)))
+
+    acct_ccy = market.account_currency(p, c)
+    _m = lambda x: market.money(p, x, currency=acct_ccy)
+    pip = market.pip_size(p, sym)
+    spread = market.spread_pips(p, sym, c)
+    d_entry, d_stop, d_target = market._to_decimal(ref), market._to_decimal(stop), market._to_decimal(target)
+    d_risk = abs(d_entry - d_stop)
+    d_reward = abs(d_target - d_entry)
+    stop_pips = d_risk / pip
+    target_pips = d_reward / pip
+    eff_stop_pips = stop_pips + spread
+    try:
+        pip_val = market.pip_value(p, sym, ref, acct_ccy, usdidr)
+        notional_1 = market.notional_per_lot(p, sym, ref, acct_ccy, usdidr)
+    except ValueError as e:
+        raise SizeError(str(e))
+
+    min_lot = Decimal(str(p.get("min_lot", 0.01)))
+    lot_step = Decimal(str(p.get("lot_step", 0.01)))
+    def _floor_lots(x):
+        if x <= 0:
+            return Decimal("0")
+        return (x / lot_step).to_integral_value(rounding=ROUND_FLOOR) * lot_step
+
+    equity = market._to_decimal(cash if cash is not None else budget)
+    limits = []
+    max_loss_cap = _f(c.get("max_loss_per_trade"))
+    if max_loss_cap:
+        loss_per_lot = eff_stop_pips * pip_val
+        lots_loss = _floor_lots(market._to_decimal(max_loss_cap) / loss_per_lot)
+        limits.append({"name": "max loss", "usd": max_loss_cap, "per": float(loss_per_lot),
+                       "shares": float(lots_loss), "lots": lots_loss,
+                       "how": "%s max loss / (%s + %s pips x %s/pip)" % (
+                           _m(max_loss_cap), _num(stop_pips), _num(spread), _m(pip_val))})
+    max_lots = _f(c.get("max_lots"))
+    if max_lots:
+        lots_cap = _floor_lots(market._to_decimal(max_lots))
+        limits.append({"name": "max lots", "usd": max_lots, "per": 1.0,
+                       "shares": float(lots_cap), "lots": lots_cap,
+                       "how": "max_lots %.2f" % float(max_lots)})
+    max_lev = _f(c.get("max_leverage")) or 10.0
+    max_notional = equity * market._to_decimal(max_lev)
+    lots_lev = _floor_lots(max_notional / notional_1)
+    limits.append({"name": "max leverage", "usd": float(max_notional), "per": float(notional_1),
+                   "shares": float(lots_lev), "lots": lots_lev,
+                   "how": "%.0fx %s = %s / %s per lot" % (max_lev, _m(equity), _m(max_notional), _m(notional_1))})
+
+    lots = min(l["lots"] for l in limits)
+    bound = [l["name"] for l in limits if l["lots"] == lots]
+    for l in limits:
+        l["binds"] = l["name"] == bound[0]
+        l["lots"] = float(l["lots"])
+    if lots < min_lot:
+        lots = Decimal("0")
+
+    money_q = Decimal("1") if acct_ccy == "IDR" else Decimal("0.01")
+    notional_out = float((notional_1 * lots).quantize(money_q, rounding=ROUND_HALF_UP))
+    loss_out = float((eff_stop_pips * pip_val * lots).quantize(money_q, rounding=ROUND_HALF_UP))
+    lev_out = round(float((notional_1 * lots) / equity), 2) if equity > 0 else 0.0
+    rr = round(float(d_reward / d_risk), 2)
+    refusal = None
+    if lots == 0:
+        if bound[0] == "max loss":
+            min_loss = (eff_stop_pips * pip_val * min_lot).quantize(money_q, rounding=ROUND_HALF_UP)
+            refusal = ("%.2f lot risks %s (incl. %s pip spread), more than your %s max loss per trade. "
+                       "No order." % (float(min_lot), _m(min_loss), _num(spread), _m(max_loss_cap)))
+        else:
+            refusal = ("%.2f lot exceeds your %s limit (%s). No order."
+                       % (float(min_lot), bound[0], limits[[l["name"] for l in limits].index(bound[0])]["how"]))
+    elif _f(c.get("min_reward_risk")) and (d_reward / d_risk) < market._to_decimal(c["min_reward_risk"]) - Decimal("1e-9"):
+        refusal = ("reward:risk %.2f is under your minimum %s. No order." % (rr, _num(c["min_reward_risk"])))
+
+    return {
+        "market": "fx", "symbol": sym, "side": side, "setup": plan.get("setup", ""),
+        "date": plan.get("date"), "entry_time": plan.get("entry_time", ""),
+        "entry_plan": float(entry_plan), "entry": ref, "entry_from": ref_from,
+        "stop": stop, "target": target, "risk_per_share": float(d_risk), "reward_risk": rr,
+        "stop_pips": float(stop_pips), "target_pips": float(target_pips),
+        "spread_pips": float(spread), "pip_value": float(pip_val),
+        "account_currency": acct_ccy, "usdidr": float(usdidr) if usdidr else None,
+        "stop_label": plan.get("stop_label", ""), "target_label": plan.get("target_label", ""),
+        "budget": budget, "equity": float(equity), "max_loss_per_trade_usd": max_loss_cap,
+        "limits": limits, "qty": float(lots), "lots": float(lots), "qty_unit": "lots",
+        "bound_by": bound[0], "cost": notional_out, "notional": notional_out,
+        "leverage": lev_out, "max_loss": loss_out,
+        "flat_by": plan.get("flat_by") or c.get("flat_by"),
+        "order_type": "limit" if limit is not None else "market",
+        "refusal": refusal, "notices": cfg_notices,
+    }
+
+
 def bracket_order(s):
     """The one proposed manual bracket order plus why and plan."""
     if s["refusal"] or s["qty"] <= 0:
         return None
     p = market.load(s.get("market") or "idx")
+    if market.is_fx(p):
+        sym = s["symbol"]
+        acct_ccy = s.get("account_currency", "IDR")
+        _m = lambda x: market.money(p, x, currency=acct_ccy)
+        o = {"symbol": sym, "side": s.get("side", "buy"), "qty": "%.2f" % s["lots"],
+             "type": s["order_type"], "time_in_force": "day", "market": "fx"}
+        if s["order_type"] == "limit":
+            o["limit_price"] = market.price(p, s["entry"], symbol=sym)
+        setup = SETUP_WORDS.get(s["setup"], s["setup"] or "day trade")
+        why = ("%s on %s: %.2f lot, bound by %s (max loss incl. %s pip spread %s)"
+               % (setup, sym, s["lots"], s["bound_by"], _num(s["spread_pips"]), _m(s["max_loss"])))
+        plan_info = {k: s[k] for k in ("entry", "stop", "target", "stop_pips", "target_pips",
+                                       "spread_pips", "pip_value", "max_loss", "account_currency",
+                                       "usdidr", "notional", "leverage", "setup", "entry_time", "flat_by")
+                     if s.get(k) is not None}
+        o.update({"order_class": "bracket",
+                  "take_profit_limit_price": market.price(p, s["target"], symbol=sym),
+                  "stop_loss_stop_price": market.price(p, s["stop"], symbol=sym),
+                  "why": why, "plan": plan_info})
+        return o
     o = {"symbol": s["symbol"], "side": s.get("side", "buy"), "qty": str(int(s["qty"])), "type": s["order_type"],
          "time_in_force": "day", "market": p["id"]}
     if s["order_type"] == "limit":
@@ -505,6 +672,33 @@ def bracket_order(s):
 
 def plan_report(s, order, notes=()):
     p = market.load(s.get("market") or "idx")
+    if market.is_fx(p):
+        sym = s["symbol"]
+        acct_ccy = s.get("account_currency", "IDR")
+        _m = lambda x: market.money(p, x, currency=acct_ccy)
+        lines = ["%s %s, %s, entry %s%s" % (sym, s["side"], s["setup"] or "setup", _px(s["entry_plan"], p, sym),
+                                            (" at " + s["entry_time"]) if s["entry_time"] else ""),
+                 "Stop %s (%s pips, +%s spread). Target %s (%s pips). Reward:risk %.2f." % (
+                     _px(s["stop"], p, sym), _num(s["stop_pips"]), _num(s["spread_pips"]),
+                     _px(s["target"], p, sym), _num(s["target_pips"]), s["reward_risk"])]
+        lines.extend(notes)
+        lines.append("")
+        lines.append("Limits (0.01 lot step; smallest wins):")
+        for l in s["limits"]:
+            lines.append("  %-13s %-54s %6.2f lots%s"
+                         % (l["name"], l["how"], l["lots"], "  <- binds" if l["binds"] else ""))
+        lines.append("")
+        if order is None:
+            lines.append("No order: " + s["refusal"])
+        else:
+            lines.append("Size: %.2f lot %s (notional %s, leverage %.2fx). Max loss incl. spread: %s."
+                         % (s["lots"], sym, _m(s["notional"]), s["leverage"], _m(s["max_loss"])))
+            lines.append("Proposed manual Forex order (nothing has been placed):")
+            lines.append("  %s %.2f lot %s at %s, stop %s, target %s"
+                         % (s["side"], s["lots"], sym, _px(s["entry"], p, sym),
+                            _px(s["stop"], p, sym), _px(s["target"], p, sym)))
+        lines.append("Education and tooling, not financial advice.")
+        return "\n".join(lines)
     lot = int(p.get("lot", 1))
     has_fees = bool(s.get("buy_fee_pct") or s.get("sell_fee_pct"))
     lines = []
@@ -880,29 +1074,33 @@ def run_plan(a, cfg, cfg_notices=()):
                 raise SizeError("--limit wants a price, like --limit 9875")
     sym = market.base_symbol(p, (plan or {}).get("symbol"))
     notes, price = list(cfg_notices), None
+    usdidr = getattr(a, "usdidr", None)
     ppath = a.prices or ("trader/prices.json" if os.path.exists("trader/prices.json") else None)
-    if ppath and limit is None and sym:
+    if ppath and (limit is None or (market.is_fx(p) and usdidr is None)) and sym:
         pdoc = read_json(ppath, "prices")
-        px, t, fresh = fresh_price(pdoc, sym, now, p=p)
-        if plan.get("prev_close") is None:
-            pc = (_lookup(pdoc.get("detail"), sym, p) or {}).get("prev_close")
-            if pc is not None:
-                plan = dict(plan, prev_close=pc)
-        if px is not None and fresh:
-            price = px
-            if px > (_f(plan.get("entry")) or 0):
-                notes.append("%s last %s (as of %s %s) is above the plan's entry %s, so the risk "
-                             "is bigger: sized at %s." % (sym, _px(px, p), market.to_local(p, t).strftime("%H:%M"),
-                                                          _place_label(p), _px(plan.get("entry"), p), _px(px, p)))
-        elif px is not None:
-            notes.append("%s in %s is %s: not used (older than %d minutes). Sized at the plan's entry."
-                         % (sym, ppath, ("from " + market.to_local(p, t).strftime("%Y-%m-%d %H:%M") + " " + _place_label(p))
-                            if t else "undated", FRESH_MINUTES))
+        if market.is_fx(p) and usdidr is None:
+            usdidr = _f(_lookup(pdoc.get("prices"), "USDIDR", p))
+        if limit is None:
+            px, t, fresh = fresh_price(pdoc, sym, now, p=p)
+            if plan.get("prev_close") is None:
+                pc = (_lookup(pdoc.get("detail"), sym, p) or {}).get("prev_close")
+                if pc is not None:
+                    plan = dict(plan, prev_close=pc)
+            if px is not None and fresh:
+                price = px
+                if px > (_f(plan.get("entry")) or 0):
+                    notes.append("%s last %s (as of %s %s) is above the plan's entry %s, so the risk "
+                                 "is bigger: sized at %s." % (sym, _px(px, p, sym), market.to_local(p, t).strftime("%H:%M"),
+                                                              _place_label(p), _px(plan.get("entry"), p, sym), _px(px, p, sym)))
+            elif px is not None:
+                notes.append("%s in %s is %s: not used (older than %d minutes). Sized at the plan's entry."
+                             % (sym, ppath, ("from " + market.to_local(p, t).strftime("%Y-%m-%d %H:%M") + " " + _place_label(p))
+                                if t else "undated", FRESH_MINUTES))
     cash = None
     if a.portfolio and os.path.exists(a.portfolio):
         pf = read_json(a.portfolio, "portfolio")
         cash = _f(pf.get("cash")) if isinstance(pf, dict) else None
-    s = size_trade(plan, cfg, a.budget, limit, price, cash, today)
+    s = size_trade(plan, cfg, a.budget, limit, price, cash, today, usdidr=usdidr)
     order = bracket_order(s)
     if order and a.write:
         src = "trader/plan.json (%s %s %s)" % (s["symbol"], s["setup"] or "plan", s["date"] or today)
@@ -953,6 +1151,7 @@ def main(argv=None):
     ap.add_argument("--limit", nargs="?", const="plan", metavar="PRICE",
                     help="a limit order instead of market, at the plan's entry or at PRICE")
     ap.add_argument("--prices", help="prices JSON (default trader/prices.json if it exists)")
+    ap.add_argument("--usdidr", type=float, help="USDIDR rate for forex IDR accounts")
     ap.add_argument("--portfolio", default="trader/portfolio.json",
                     help="your account; its cash caps the size if it exists")
     ap.add_argument("--now", help="pretend it is this WIB time, e.g. \"2026-11-23 09:35\"")

@@ -258,7 +258,7 @@ def round_tick(p, price, mode="nearest", symbol=None):
     return (d / step).to_integral_value(rounding=rounding) * step
 
 
-def valid_tick(p, price):
+def valid_tick(p, price, symbol=None):
     """True if `price` is >= min_price (if set), > 0, and a valid tick multiple."""
     d = _to_decimal(price)
     min_p = p.get("min_price")
@@ -266,7 +266,7 @@ def valid_tick(p, price):
         return False
     if d <= 0:
         return False
-    return (d % tick_size(p, d)) == 0
+    return (d % tick_size(p, d, symbol=symbol)) == 0
 
 
 def round_lot(p, shares):
@@ -371,9 +371,9 @@ def price_tol(p, price=None, symbol=None):
     return min(Decimal("0.005"), tick / Decimal("2"))
 
 
-def money(p, amount):
+def money(p, amount, currency=None):
     """Format a money amount using profile `p`'s currency (IDR 0 dp, others 2 dp; never strips zeros)."""
-    ccy = (p or {}).get("currency", "IDR")
+    ccy = (currency or (p or {}).get("currency", "IDR")).upper()
     if ccy == "IDR":
         n = int(_to_decimal(amount).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         if n == 0:
@@ -452,6 +452,90 @@ def allows_short(p, cfg=None):
 def allows_margin(p, cfg=None):
     """True only when BOTH profile `p` and config `cfg` allow margin."""
     return bool((p or {}).get("allow_margin", False)) and bool((cfg or {}).get("allow_margin", False))
+
+
+MISSING_USDIDR_MSG = "need a USDIDR quote: run alerts.py quote USDIDR --write or pass --usdidr"
+
+
+def is_fx(p):
+    """True for pair-based forex profiles."""
+    return bool((p or {}).get("pairs"))
+
+
+def account_currency(p, cfg=None):
+    """Account currency for `p` / `cfg` (default IDR for fx/idx)."""
+    raw = (cfg or {}).get("account_currency") or ((p or {}).get("defaults") or {}).get("account_currency")
+    return (raw or (p or {}).get("currency") or "IDR").upper()
+
+
+def spread_pips(p, symbol, cfg=None):
+    """Spread in pips for `symbol` from config override, else pair spec, else profile default."""
+    sym = base_symbol(p, symbol)
+    raw = (cfg or {}).get("spread_pips")
+    val = None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        val = raw
+    elif isinstance(raw, dict):
+        if raw.get(sym) is not None:
+            val = raw[sym]
+        elif raw.get("default") is not None:
+            val = raw["default"]
+    if val is None:
+        spec = require_pair(p, sym)
+        if spec and spec.get("spread_pips") is not None:
+            val = spec["spread_pips"]
+        else:
+            val = (p or {}).get("default_spread_pips", 1.5)
+    d = _to_decimal(val)
+    if d < 0:
+        raise ValueError("spread_pips must be >= 0, got %r" % (val,))
+    return d
+
+
+def _fx_usd_convert(amount_usd, account_ccy, usdidr):
+    acct = (account_ccy or "IDR").upper()
+    if acct == "USD":
+        return amount_usd
+    if acct == "IDR":
+        if usdidr is None or _to_decimal(usdidr) <= 0:
+            raise ValueError(MISSING_USDIDR_MSG)
+        return amount_usd * _to_decimal(usdidr)
+    raise ValueError("unsupported account_currency %r; use IDR or USD" % acct)
+
+
+def pip_value(p, symbol, entry, account_ccy="IDR", usdidr=None):
+    """Pip value per 1.00 standard lot (100,000 units) in `account_ccy`."""
+    sym = base_symbol(p, symbol)
+    pip = pip_size(p, sym)
+    lot = Decimal(str((p or {}).get("lot", 100000)))
+    entry_d = _to_decimal(entry)
+    if entry_d <= 0:
+        raise ValueError("entry price must be > 0, got %r" % (entry,))
+    base, quote = sym[:3], sym[3:6]
+    acct = (account_ccy or "IDR").upper()
+    if quote == "USD":
+        return _fx_usd_convert(pip * lot, acct, usdidr)
+    if quote == "IDR" and acct == "IDR":
+        return pip * lot
+    if base == "USD":
+        return _fx_usd_convert((pip * lot) / entry_d, acct, usdidr)
+    raise ValueError("unsupported cross pair %s" % sym)
+
+
+def notional_per_lot(p, symbol, entry, account_ccy="IDR", usdidr=None):
+    """Notional value of 1.00 standard lot (100,000 units) in `account_ccy`."""
+    sym = base_symbol(p, symbol)
+    require_pair(p, sym)
+    lot = Decimal(str((p or {}).get("lot", 100000)))
+    entry_d = _to_decimal(entry)
+    if entry_d <= 0:
+        raise ValueError("entry price must be > 0, got %r" % (entry,))
+    base, quote = sym[:3], sym[3:6]
+    acct = (account_ccy or "IDR").upper()
+    if quote == "IDR" and acct == "IDR":
+        return lot * entry_d
+    notional_usd = lot if base == "USD" else (lot * entry_d)
+    return _fx_usd_convert(notional_usd, acct, usdidr)
 
 
 def valid_symbol(p, sym):

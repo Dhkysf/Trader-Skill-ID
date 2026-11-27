@@ -1,5 +1,17 @@
 {
   "market": "fx",
+  "account_currency": "IDR",
+  "budget": 20000000,
+  "max_loss_per_trade": 500000,
+  "max_daily_loss": 1500000,
+  "max_lots": 1.0,
+  "max_leverage": 10,
+  "spread_pips": {
+    "EURUSD": 1.0,
+    "USDJPY": 1.0,
+    "USDIDR": 50.0,
+    "default": 1.5
+  },
   "allow_short": true,
   "allow_margin": true,
   "allow_options": false,
