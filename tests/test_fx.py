@@ -4,6 +4,9 @@ from decimal import Decimal
 import gzip
 import json
 import os
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from _load import ROOT, load
@@ -157,6 +160,96 @@ class FxProfileTest(unittest.TestCase):
                                                date="2026-11-23", time="09:35 AM", entry_bar=6, interval="5m"),
                             p=self.idx, cfg={"market": "idx"})
         self.assertIn("v2 plans longs only", str(ctx2.exception))
+
+
+class FxCliTest(unittest.TestCase):
+    def _run_cli(self, skill, script, args, cfg):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "trader"), exist_ok=True)
+            with open(os.path.join(d, "trader", "config.json"), "w", encoding="utf-8") as fh:
+                json.dump(cfg, fh)
+            cmd = [sys.executable, os.path.join(ROOT, "skills", skill, script)] + args
+            return subprocess.run(cmd, cwd=d, capture_output=True, text=True)
+
+    def test_exit_cli_fx_sell_plan(self):
+        r = self._run_cli(
+            "trader-exit", "exit.py",
+            ["plan", "--symbol", "EURUSD", "--side", "sell", "--entry", "1.09745",
+             "--stop", "price:1.09830", "--target", "2R", "--date", "2026-11-26",
+             "--now", "2026-11-26 03:25"],
+            {"market": "fx", "allow_short": True},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("EURUSD short", r.stdout)
+        self.assertIn("1.09745", r.stdout)
+        self.assertIn("1.09830", r.stdout)
+        self.assertIn("8.5 pips", r.stdout)
+        self.assertIn("17.0 pips", r.stdout)
+
+    def test_exit_cli_fx_example_config(self):
+        with open(os.path.join(ROOT, "skills", "trader-budget", "config.fx.example.json"), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        r = self._run_cli(
+            "trader-exit", "exit.py",
+            ["plan", "--symbol", "EURUSD", "--side", "sell", "--entry", "1.09745",
+             "--stop", "price:1.09830", "--target", "2R", "--date", "2026-11-26",
+             "--now", "2026-11-26 03:25"],
+            cfg,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("EURUSD short", r.stdout)
+
+    def test_entry_cli_fx_sell_check(self):
+        r = self._run_cli(
+            "trader-entry", "entry.py",
+            ["check", "EURUSD", "--side", "sell", "--session", "london",
+             "--offline", EURUSD_GZ, "--now", "2026-11-26 05:00"],
+            {"market": "fx", "allow_short": True},
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue("TRIGGERED" in r.stdout or "WAITING" in r.stdout, r.stdout)
+
+    def test_idx_cli_sell_still_refused(self):
+        r = self._run_cli(
+            "trader-exit", "exit.py",
+            ["plan", "--symbol", "BBCA", "--side", "sell", "--entry", "9800",
+             "--stop", "price:9900", "--date", "2026-11-26", "--now", "2026-11-26 10:00"],
+            {"market": "idx", "allow_short": True},
+        )
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("v2 plans longs only", r.stderr)
+
+    def test_null_time_limits_everywhere(self):
+        ch = entry.get_chart("EURUSD=X", "5m", offline=EURUSD_GZ, p=market.load("fx"))
+        res = entry.evaluate(
+            ch, market.local_to_utc(market.load("fx"), datetime.datetime(2026, 11, 26, 4, 0)),
+            setup="orb", or_minutes=15,
+            cfg={"market": "fx", "allow_short": True, "no_entries_before": None, "no_entries_after": None},
+            side="sell", session_name="london",
+        )
+        self.assertEqual(res["status"], "triggered")
+        self.assertIsNone(res["no_entries_before"])
+        self.assertIsNone(res["no_entries_after"])
+
+        flat_by, note = exit_mod.resolve_flat_by(
+            datetime.date(2026, 11, 26), None, {"market": "fx", "flat_by": None},
+            datetime.time(3, 20), p=market.load("fx"),
+        )
+        self.assertIsNone(flat_by)
+        self.assertEqual(note, "")
+
+        rules = alerts.rules_from_plan(
+            {"symbol": "EURUSD", "market": "fx", "side": "sell", "stop": 1.09830, "target": 1.09575, "flat_by": None},
+            p=market.load("fx"),
+        )
+        self.assertEqual([x["type"] for x in rules], ["above", "below"])
+
+        check_mod = load("trader-risk", "check")
+        reasons, warns = check_mod.window_check(
+            datetime.datetime(2026, 11, 26, 3, 25),
+            {"market": "fx", "no_entries_before": None, "no_entries_after": "16:30"},
+        )
+        self.assertEqual((reasons, warns), ([], []))
 
 
 if __name__ == "__main__":

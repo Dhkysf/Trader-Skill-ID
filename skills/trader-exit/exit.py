@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exit Planner for trader-exit: sets the stop and the target BEFORE you
-enter, so you know when to get out. Standard library only. Long side only.
+enter, so you know when to get out. Standard library only.
 It never places an order.
 
     python exit.py plan                                     # from trader/entry.json: or-mid stop, 2R target
@@ -26,7 +26,7 @@ Targets (round down to the IDX tick):
 
 Refused, with the reason: a stop at or above the entry, a target at or below
 it, a risk under 2 ticks or 0.05% of the price, an entry.json that has not
-triggered (unless you give --entry), or a short (v2 plans longs only).
+triggered (unless you give --entry), or a short when the market or config does not allow shorts.
 
 flat_by (default 15:45 WIB, or "flat_by" in trader/config.json): out by then,
 win or lose. "min_reward_risk" in the config (default 1.0) only warns here;
@@ -120,6 +120,8 @@ def parse_now(text, p=None):
 
 
 def parse_hhmm(text, what, p=None):
+    if text is None or text == "":
+        return None
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", str(text))
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         raise PlanError("%s wants a %s time like 15:45, not %r" % (what, _place_label(p), text))
@@ -551,8 +553,18 @@ def read_config(path):
 def resolve_flat_by(day, explicit, cfg, entry_time, p=None):
     """(HH:MM, note)."""
     prof = p or _IDX
-    default_flat = (prof.get("defaults") or {}).get("flat_by") or DEFAULTS["flat_by"]
-    t = parse_hhmm(explicit or cfg.get("flat_by") or default_flat, "--flat-by" if explicit else "flat_by", p=prof)
+    defs = prof.get("defaults") or {}
+    if explicit is not None:
+        raw = explicit
+    elif cfg is not None and "flat_by" in cfg:
+        raw = cfg["flat_by"]
+    elif "flat_by" in defs:
+        raw = defs["flat_by"]
+    else:
+        raw = DEFAULTS["flat_by"]
+    t = parse_hhmm(raw, "--flat-by" if explicit else "flat_by", p=prof)
+    if t is None:
+        return None, ""
     note = ""
     tw = market.trading_day_window(prof, day) if day else []
     if tw:
@@ -586,7 +598,9 @@ def gather(a, p=None, cfg=None):
         raise PlanError("use --from or --symbol, not both")
     if a.side in ("sell", "short"):
         if not market.allows_short(prof, cfg):
-            raise PlanError("v2 plans longs only: no stops above a short entry. Plan a buy instead.")
+            if not prof.get("allow_short", False):
+                raise PlanError("v2 plans longs only: no stops above a short entry. Plan a buy instead.")
+            raise PlanError('short selling is off in config (set "allow_short": true to plan a short).')
         side = "sell"
     else:
         side = "buy"
@@ -605,7 +619,9 @@ def gather(a, p=None, cfg=None):
         doc_side = str(doc.get("side") or "buy").lower()
         if doc_side not in ("buy", "long"):
             if not market.allows_short(prof, cfg):
-                raise PlanError("%s is a %s: v2 plans longs only" % (path, doc.get("side")))
+                if not prof.get("allow_short", False):
+                    raise PlanError("%s is a %s: v2 plans longs only" % (path, doc.get("side")))
+                raise PlanError('%s is a %s: short selling is off in config (set "allow_short": true).' % (path, doc.get("side")))
             side = "sell"
         if doc.get("status") != "triggered" and a.entry is None:
             raise PlanError("%s says %s is %s, not triggered: plan once it triggers, or give --entry PRICE to plan ahead"
@@ -712,7 +728,8 @@ def build_plan(a, now_utc):
         pass
     warnings.extend(ar_warnings(p, c["stop"], c["target"], prev_close, day))
     now_local = market.to_local(p, now_utc)
-    lunch = _holds_through_lunch(p, day, entry_time, parse_hhmm(flat_by, "flat_by", p=p), now_local)
+    flat_t = parse_hhmm(flat_by, "flat_by", p=p)
+    lunch = _holds_through_lunch(p, day, entry_time, flat_t, now_local) if flat_t is not None else None
     if lunch:
         warnings.append("Plan holds through the lunch break (%s-%s): the price can gap after the lunch break."
                         % (hm(lunch[0]), hm(lunch[1])))
@@ -749,7 +766,10 @@ def describe(plan, p=None):
     out.append("  Target        %s  %s%s" % (_money(plan["target"], prof, symbol=sym), plan["target_label"], t_pip_s))
     out.append("  Risk a share  %s (%s%% of the entry)%s" % (_money(plan["risk_per_share"], prof, symbol=sym), pct, pip_s))
     out.append("  Reward:risk   %s" % ratio(plan["reward_risk"]))
-    out.append("  Flat by       %s %s, win or lose: no overnight hold" % (plan["flat_by"], _tz_label(prof)))
+    if plan.get("flat_by"):
+        out.append("  Flat by       %s %s, win or lose: no overnight hold" % (plan["flat_by"], _tz_label(prof)))
+    else:
+        out.append("  Flat by       none (no flat-by limit)")
     out.append("Set before the entry. If price hits the stop, you are out; never move it further away.")
     out.append(NOTE)
     return out
@@ -785,7 +805,7 @@ def cmd_show(a):
         print("No plan at %s yet. Make one: exit.py plan --write" % a.plan)
         return 1
     plan = read_json(a.plan, "plan")
-    for k in ("symbol", "date", "entry", "stop", "target", "risk_per_share", "reward_risk", "flat_by"):
+    for k in ("symbol", "date", "entry", "stop", "target", "risk_per_share", "reward_risk"):
         if plan.get(k) is None:
             raise PlanError("%s is missing %r: make a new plan with exit.py plan --write" % (a.plan, k))
     p = market.load(plan["market"]) if plan.get("market") else market.from_config(getattr(a, "config", None))
@@ -820,7 +840,8 @@ def main(argv=None):
     p.add_argument("--time", help="entry time, e.g. 10:15 AM")
     p.add_argument("--entry-bar", type=int)
     p.add_argument("--interval", choices=["5m", "1m"])
-    p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"], help="v2: buy only")
+    p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"],
+                   help="buy/long or sell/short (when market allows)")
     p.add_argument("--stop", help="or-mid (orb default), or-low, price:X, pct:X, atr:K")
     p.add_argument("--target", help="2R (default), 1R, 1.5R, price:X")
     p.add_argument("--flat-by", help="HH:MM market time (default: config flat_by, 15:45)")

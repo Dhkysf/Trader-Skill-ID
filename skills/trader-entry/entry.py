@@ -149,6 +149,8 @@ def parse_now(text, p=None):
 
 
 def parse_hhmm(text, what, p=None):
+    if text is None or text == "":
+        return None
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", str(text))
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
         raise EntryError("%s wants a %s time like 15:30, not %r" % (what, _place_label(p), text))
@@ -453,16 +455,17 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     std_raw = prof["sessions"].get(market._WEEKDAYS[day.weekday()]) or prof["sessions"].get(market._WEEKDAYS[(day - datetime.timedelta(days=1)).weekday()]) or []
     std_close = datetime.time.fromisoformat(std_raw[-1][1]) if std_raw else close_dt.time()
     early = close_dt.time() != std_close
-    before_s = eff_cfg.get("no_entries_before")
-    before = datetime.datetime.combine(day, parse_hhmm(before_s, "no_entries_before", p=prof)) if before_s else open_dt
-    cutoff = early_cutoff(day, parse_hhmm(eff_cfg["no_entries_after"], "no_entries_after", p=prof),
-                          close_dt, open_dt.time(), std_close)
+    before_t = parse_hhmm(eff_cfg.get("no_entries_before"), "no_entries_before", p=prof)
+    before = datetime.datetime.combine(day, before_t) if before_t is not None else open_dt
+    after_t = parse_hhmm(eff_cfg.get("no_entries_after"), "no_entries_after", p=prof)
+    cutoff = early_cutoff(day, after_t, close_dt, open_dt.time(), std_close) if after_t is not None else close_dt
     break_min = int(eff_cfg.get("no_entries_before_break_min") or 0)
     break_buf = datetime.timedelta(minutes=break_min)
     breaks = [(windows[i][1], windows[i + 1][0]) for i in range(len(windows) - 1)]
     or_end = open_dt + datetime.timedelta(minutes=or_minutes)
     res.update(opens=hm(open_dt.time()), closes=hm(close_dt.time()), early_close=early_dates.get(day.isoformat()),
-               no_entries_before=hm(before), no_entries_after=hm(cutoff))
+               no_entries_before=hm(before) if before_t is not None else None,
+               no_entries_after=hm(cutoff) if after_t is not None else None)
 
     by_slot = {}
     for b in chart["bars"]:
@@ -733,7 +736,7 @@ def bar_line(b, res):
             avg = orr.get("avg_volume")
             if res.get("min_volume_x") and avg:
                 note += ", but volume %.2fx is under %.2fx" % (b["v"] / float(avg), res["min_volume_x"])
-            elif b["end"] < datetime.datetime.combine(b["et"].date(), parse_hhmm(res["no_entries_before"], "x", p=p)):
+            elif res.get("no_entries_before") and b["end"] < datetime.datetime.combine(b["et"].date(), parse_hhmm(res["no_entries_before"], "x", p=p)):
                 note += ", but no entries before %s" % res["no_entries_before"]
     else:
         note = "%s under %s" % (_px(lvl - b["c"], p, symbol=res["symbol"]), _px(lvl, p, symbol=res["symbol"]))
@@ -868,7 +871,8 @@ def watch_loop(provider, clock, sleep, emit, opts, every=30, until=None, max_err
         else:
             nxt = open_dt + datetime.timedelta(seconds=((next_slot if next_slot is not None else feed_slot) + 1) * step + delay + GRACE)
             wait = (nxt - local).total_seconds()
-        cutoff = datetime.datetime.combine(day, parse_hhmm(res.get("no_entries_after") or "15:30", "cutoff", p=prof))
+        cutoff_t = parse_hhmm(res.get("no_entries_after"), "cutoff", p=prof)
+        cutoff = datetime.datetime.combine(day, cutoff_t) if cutoff_t is not None else None
         for stop_at in (until, cutoff, close_dt):
             if stop_at and stop_at > local:
                 wait = min(wait, (stop_at - local).total_seconds())
@@ -881,7 +885,9 @@ def _opts(a, cfg):
     p = market.from_config(cfg)
     if a.side in ("sell", "short"):
         if not market.allows_short(p, cfg):
-            raise EntryError("v2 plans longs only: no short entries. Watch for a buy (--side buy) instead.")
+            if not p.get("allow_short", False):
+                raise EntryError("v2 plans longs only: no short entries. Watch for a buy (--side buy) instead.")
+            raise EntryError('short selling is off in config (set "allow_short": true to watch a short).')
         side = "sell"
     else:
         side = "buy"

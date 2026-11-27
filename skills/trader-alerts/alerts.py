@@ -488,11 +488,20 @@ def rules_from_plan(plan, cfg_flat_by=None, p=None):
         label = plan.get("%s_label" % key)
         out.append({"id": "%s-plan-%s" % (sym.lower(), key), "symbol": sym, "type": typ, "price": float(v),
                     "note": word + (": " + label if label else "")})
-    flat = plan.get("flat_by") or cfg_flat_by or default_flat
-    if _hhmm(flat) is None:
-        raise AlertError("the plan's flat_by %r is not a time like 15:55" % flat)
-    out.append({"id": "%s-flat-by" % sym.lower(), "symbol": sym, "type": "time", "at": flat,
-                "label": "flat by close", "before_close": True})
+    defs = prof.get("defaults") or {}
+    if "flat_by" in plan:
+        flat = plan["flat_by"]
+    elif cfg_flat_by is not None:
+        flat = cfg_flat_by
+    elif "flat_by" in defs:
+        flat = defs["flat_by"]
+    else:
+        flat = "15:45"
+    if flat not in (None, ""):
+        if _hhmm(flat) is None:
+            raise AlertError("the plan's flat_by %r is not a time like 15:55" % flat)
+        out.append({"id": "%s-flat-by" % sym.lower(), "symbol": sym, "type": "time", "at": flat,
+                    "label": "flat by close", "before_close": True})
     if plan.get("date"):
         for r in out:
             r["date"] = str(plan["date"])
@@ -625,6 +634,8 @@ def cmd_add(a):
             raise AlertError("no plan at %s (run trader-exit first)" % a.plan)
         cfg = _read(a.config, {}) if a.config else {}
         p = market.from_config(cfg)
+        if "flat_by" not in plan and "flat_by" in cfg and cfg["flat_by"] is None:
+            plan = dict(plan, flat_by=None)
         new = rules_from_plan(plan, (cfg or {}).get("flat_by"), p=p)
         ids = {r["id"] for r in new}
         doc["rules"] = [r for r in doc["rules"] if r.get("id") not in ids] + new
