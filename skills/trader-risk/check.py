@@ -75,6 +75,7 @@ DEFAULTS = {
     "min_order": None, "max_loss_per_trade": None, "max_daily_loss": None, "max_trades_per_day": 3,
     "max_orders_per_day": 10, "min_reward_risk": 1.0, "require_stop": True,
     "no_entries_before": "09:15", "no_entries_after": "15:30", "flat_by": "15:45",
+    "no_entries_before_break_min": 0,
     "paper": True, "blocked": [], "allow_options": False, "allow_margin": False, "allow_short": False,
 }
 ORDER_FIELDS = market.ORDER_FIELDS

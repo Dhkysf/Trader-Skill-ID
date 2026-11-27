@@ -708,6 +708,19 @@ class IdxRiskTest(unittest.TestCase):
             self.assertEqual(res["results"][0]["verdict"], "BLOCK", ts)
             self.assertTrue(any(r.startswith(prefix) for r in res["results"][0]["reasons"]), (ts, res["results"][0]["reasons"]))
 
+    def test_pre_lunch_blackout_default_and_override(self):
+        for ts in ("2026-11-23 11:55", "2026-11-20 11:25"):
+            res = check.check([self.order], self.cfg, now=self._at(ts))
+            self.assertEqual(res["results"][0]["verdict"], "BLOCK", ts)
+            self.assertTrue(
+                any(r.startswith("window: within 10 min of the lunch break") for r in res["results"][0]["reasons"]),
+                (ts, res["results"][0]["reasons"]),
+            )
+        res_ok = check.check([self.order], self.cfg, now=self._at("2026-11-23 11:45"))
+        self.assertEqual(res_ok["results"][0]["verdict"], "PASS", res_ok["results"][0]["reasons"])
+        res_off = check.check([self.order], dict(self.cfg, no_entries_before_break_min=0), now=self._at("2026-11-23 11:55"))
+        self.assertEqual(res_off["results"][0]["verdict"], "PASS", res_off["results"][0]["reasons"])
+
     def test_short_margin_and_fee_inclusive_loss_blocks(self):
         short_ord = dict(self.order, side="sell")
         res_sh = check.check([short_ord], dict(self.cfg, allow_short=True), now=self._at("2026-11-23 10:15"))
