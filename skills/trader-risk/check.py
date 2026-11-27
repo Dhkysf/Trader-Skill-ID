@@ -244,6 +244,8 @@ def money(x, p=None):
 def account(cfg, portfolio, prices, p=None):
     """Starting account: cash and position values. No portfolio = a fresh
     account funded with the budget."""
+    prof = p or _IDX
+    prices = {market.base_symbol(prof, k): float(v) for k, v in (prices or {}).items() if _f(v)}
     warnings = []
     if portfolio is None:
         budget = _f(cfg.get("budget"))
@@ -256,7 +258,7 @@ def account(cfg, portfolio, prices, p=None):
         raise RiskError("portfolio.json needs a \"cash\" number")
     shares, values = {}, {}
     for pos in portfolio.get("positions", []):
-        t = str(pos.get("ticker") or pos.get("symbol") or "").upper()
+        t = market.base_symbol(prof, pos.get("ticker") or pos.get("symbol"))
         if not t:
             continue
         n = _f(pos.get("shares", pos.get("qty")))
@@ -306,12 +308,16 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     lot = int(p.get("lot", 1))
     buy_fee_pct, sell_fee_pct = market.fees(p, c)
     has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
-    prices = {str(k).upper(): float(v) for k, v in (prices or {}).items() if _f(v)}
+    prices = {market.base_symbol(p, k): float(v) for k, v in (prices or {}).items() if _f(v)}
+    if price_times is not None:
+        price_times = {market.base_symbol(p, k): v for k, v in price_times.items()}
+    if prev_closes is not None:
+        prev_closes = {market.base_symbol(p, k): float(v) for k, v in prev_closes.items() if _f(v)}
     now_utc = now or parse_now(None, p=p)
     now_et = market.to_local(p, now_utc)
     today = today or now_et.date().isoformat()
     acct, top_warn = account(c, portfolio, prices, p=p)
-    blocked = {str(b).upper() for b in c.get("blocked") or []}
+    blocked = {market.base_symbol(p, b) for b in c.get("blocked") or []}
     done_today = placed_today(state, today)
     count_today = len(done_today)
     entries_today = [r for r in done_today if rec_is_entry(r)]
@@ -323,7 +329,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                             "the daily loss" % (r.get("side"), r.get("symbol")))
         else:
             loss_today += ml
-    placed_keys = {(str(r.get("symbol", "")).upper(), r.get("side")) for r in done_today}
+    placed_keys = {(market.base_symbol(p, r.get("symbol")), r.get("side")) for r in done_today}
     win_reasons, win_warns = window_check(now_et, c)
     seen = set()
     results = []
@@ -347,7 +353,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
     for i, o in enumerate(orders, 1):
         reasons, warns, info = [], [], []
         later = []                       # entry-only reasons, turned into warnings for an exit
-        sym = str(o.get("symbol", "")).strip().upper()
+        sym = market.base_symbol(p, o.get("symbol"))
         side = str(o.get("side", "")).strip().lower()
         typ = str(o.get("type", "market")).strip().lower()
         tif = str(o.get("time_in_force", "day")).strip().lower()
@@ -737,7 +743,7 @@ def report(res):
     return "\n".join(lines)
 
 
-def load_prices(pdoc):
+def load_prices(pdoc, p=None):
     """prices.json -> ({SYM: price}, {SYM: price time as naive UTC or None}).
 
     The price time is the quote's own time (detail.time), else when it was fetched
@@ -747,28 +753,30 @@ def load_prices(pdoc):
     prices = pdoc.get("prices", pdoc)
     if not isinstance(prices, dict):
         return {}, {}
+    prof = p or _IDX
     out, times = {}, {}
     as_of = parse_utc(pdoc.get("as_of"))
-    detail = pdoc.get("detail") or {}
-    for s, p in prices.items():
-        if _f(p) is None:
+    detail = {market.base_symbol(prof, k): v for k, v in (pdoc.get("detail") or {}).items()}
+    for s, val in prices.items():
+        if _f(val) is None:
             continue
-        s = str(s).upper()
-        out[s] = float(p)
+        s = market.base_symbol(prof, s)
+        out[s] = float(val)
         d = detail.get(s) or {}
         times[s] = parse_utc(d.get("time")) or parse_utc(d.get("fetched")) or as_of
     return out, times
 
 
-def load_prev_closes(pdoc):
+def load_prev_closes(pdoc, p=None):
     """Extract {SYM: prev_close} from prices.json detail."""
     if not isinstance(pdoc, dict):
         return {}
+    prof = p or _IDX
     out = {}
     for s, d in (pdoc.get("detail") or {}).items():
         pc = _f((d or {}).get("prev_close"))
         if pc and pc > 0:
-            out[str(s).upper()] = pc
+            out[market.base_symbol(prof, s)] = pc
     return out
 
 
@@ -798,8 +806,8 @@ def main(argv=None):
             raise RiskError("no orders in %s" % a.orders)
         portfolio = read_json(a.portfolio, "portfolio", required=False)
         pdoc = read_json(a.prices, "prices", required=False) or {}
-        prices, times = load_prices(pdoc)
-        prev_closes = load_prev_closes(pdoc)
+        prices, times = load_prices(pdoc, p=p)
+        prev_closes = load_prev_closes(pdoc, p=p)
         state = read_json(a.state, "broker state", required=False)
         res = check(orders, cfg, portfolio, prices, state, a.today, now, times, prev_closes=prev_closes)
         if pdoc.get("as_of"):

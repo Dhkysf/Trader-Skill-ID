@@ -399,13 +399,16 @@ def read_text(path):
 
 def load_chart(sym, interval, day, offline=None, p=None):
     prof = p or _IDX
-    ysym = market.yahoo_symbol(prof, sym)
+    base = market.base_symbol(prof, sym)
+    ysym = market.yahoo_symbol(prof, base)
     if offline:
         path = offline
         if os.path.isdir(offline):
-            path = os.path.join(offline, ysym + ".json")
-            if not os.path.exists(path):
-                path += ".gz"
+            for name in (base + ".json", base + ".json.gz", ysym + ".json", ysym + ".json.gz"):
+                fp = os.path.join(offline, name)
+                if os.path.exists(fp):
+                    path = fp
+                    break
         if not os.path.exists(path):
             raise PlanError("no offline file %s" % path)
         try:
@@ -428,7 +431,7 @@ def load_chart(sym, interval, day, offline=None, p=None):
         raise PlanError("Yahoo has no data for %s: %s" % (sym, err.get("description") or "unknown ticker"))
     r = res[0] or {}
     meta = r.get("meta") or {}
-    if str(meta.get("symbol") or ysym).upper() != ysym:
+    if market.base_symbol(prof, meta.get("symbol") or ysym) != base:
         raise PlanError("the chart file holds %s, not %s" % (meta.get("symbol"), sym))
     q = ((r.get("indicators") or {}).get("quote") or [{}])[0] or {}
 
@@ -606,6 +609,7 @@ def build_plan(a, now_utc):
     info = gather(a)
     cfg = read_config(a.config)
     p = market.from_config(cfg)
+    info["symbol"] = market.base_symbol(p, info["symbol"])
     stop_text = a.stop
     if not stop_text:
         if info["setup"] != "orb":
@@ -739,6 +743,7 @@ def cmd_show(a):
         if plan.get(k) is None:
             raise PlanError("%s is missing %r: make a new plan with exit.py plan --write" % (a.plan, k))
     p = market.load(plan["market"]) if plan.get("market") else market.from_config(getattr(a, "config", None))
+    plan = dict(plan, symbol=market.base_symbol(p, plan["symbol"]))
     if a.json:
         print(json.dumps(plan, indent=2))
         return 0

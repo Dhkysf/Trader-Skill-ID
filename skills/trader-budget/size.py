@@ -160,7 +160,20 @@ def _f(x):
         return None
 
 
-def parse_weights(data):
+def _lookup(mapping, sym, p=None):
+    if not isinstance(mapping, dict):
+        return None
+    prof = p or _IDX
+    want = market.base_symbol(prof, sym)
+    if want in mapping:
+        return mapping[want]
+    for k, v in mapping.items():
+        if market.base_symbol(prof, k) == want:
+            return v
+    return None
+
+
+def parse_weights(data, p=None):
     """Accept a weights file, a {ticker: weight} dict or a list of rows.
 
     Returns [{"ticker", "name", "weight"}] with weight as a float."""
@@ -181,18 +194,20 @@ def parse_weights(data):
             rows.append({"ticker": t, "name": r.get("name", ""), "weight": w})
     else:
         raise SizeError("weights must be a list or an object")
+    prof = p or _IDX
     out = []
     for r in rows:
         try:
             w = float(r["weight"])
         except (TypeError, ValueError):
             raise SizeError("weight for %s is not a number: %r" % (r["ticker"], r["weight"]))
-        out.append({"ticker": str(r["ticker"]).strip().upper(), "name": r["name"] or "", "weight": w})
+        out.append({"ticker": market.base_symbol(prof, r["ticker"]), "name": r["name"] or "", "weight": w})
     return out
 
 
-def weights_from_arg(text):
+def weights_from_arg(text, p=None):
     """AAPL=22.04,AXP=17.14 -> {ticker: weight}"""
+    prof = p or _IDX
     out = {}
     for part in text.split(","):
         part = part.strip()
@@ -201,28 +216,29 @@ def weights_from_arg(text):
         if "=" not in part:
             raise SizeError("--weights wants TICKER=WEIGHT pairs, got %r" % part)
         t, w = part.split("=", 1)
-        out[t.strip().upper()] = w.strip()
+        out[market.base_symbol(prof, t)] = w.strip()
     return out
 
 
-def load_prices(path):
+def load_prices(path, p=None):
     if not path:
         return {}
+    prof = p or _IDX
     data = read_json(path, "prices")
     prices = data.get("prices", data) if isinstance(data, dict) else {}
     out = {}
-    for t, p in prices.items():
+    for t, val in prices.items():
         try:
-            out[str(t).upper()] = float(p)
+            out[market.base_symbol(prof, t)] = float(val)
         except (TypeError, ValueError):
             continue
     return out
 
 
-def price_time(doc, sym):
+def price_time(doc, sym, p=None):
     """When this symbol's price is from: the quote's own time (detail[sym].time), else when it
     was fetched (detail[sym].fetched), else the file's as_of."""
-    det = ((doc or {}).get("detail") or {}).get(sym) or {}
+    det = _lookup((doc or {}).get("detail"), sym, p) or {}
     for key in ("time", "fetched"):
         t = parse_utc(det.get(key))
         if t:
@@ -230,18 +246,18 @@ def price_time(doc, sym):
     return parse_utc((doc or {}).get("as_of"))
 
 
-def fresh_price(doc, sym, now_utc, minutes=FRESH_MINUTES):
+def fresh_price(doc, sym, now_utc, minutes=FRESH_MINUTES, p=None):
     """(price, fetched_utc, fresh) for sym from a prices.json doc, or (None, None, False)."""
     if not isinstance(doc, dict):
         return None, None, False
-    p = _f((doc.get("prices") or {}).get(sym))
-    if p is None or p <= 0:
+    px = _f(_lookup(doc.get("prices"), sym, p))
+    if px is None or px <= 0:
         return None, None, False
-    t = price_time(doc, sym)
+    t = price_time(doc, sym, p=p)
     if t is None:
-        return p, None, False
+        return px, None, False
     age = (now_utc - t).total_seconds()
-    return p, t, -60 <= age <= minutes * 60
+    return px, t, -60 <= age <= minutes * 60
 
 
 # ---------------------------------------------------------------- money helpers
@@ -298,7 +314,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
     has_fees = buy_fee_pct > 0 or sell_fee_pct > 0
     if not isinstance(plan, dict):
         raise SizeError("the plan is not a JSON object")
-    sym = str(plan.get("symbol") or "").strip().upper()
+    sym = market.base_symbol(p, plan.get("symbol"))
     if not sym:
         raise SizeError("the plan has no symbol (run trader-exit)")
     side = str(plan.get("side") or "buy").strip().lower()
@@ -312,7 +328,7 @@ def size_trade(plan, cfg, budget=None, limit=None, price=None, cash=None, today=
         if v is None or v <= 0:
             raise SizeError("the plan needs a positive %s (run trader-exit); a bracket order needs entry, "
                             "stop and target" % name)
-    blocked = {str(b).upper() for b in (c.get("blocked") or [])}
+    blocked = {market.base_symbol(p, b) for b in (c.get("blocked") or [])}
     if sym in blocked:
         raise SizeError("%s is on your blocked list" % sym)
 
@@ -516,9 +532,10 @@ def plan_report(s, order, notes=()):
 
 # ---------------------------------------------------------------- weights mode (v1)
 
-def normalise(rows, blocked=(), top=None):
+def normalise(rows, blocked=(), top=None, p=None):
     """Drop blocked and non-positive weights, keep the top N, renormalise to 100."""
-    blocked = {str(b).upper() for b in (blocked or [])}
+    prof = p or _IDX
+    blocked = {market.base_symbol(prof, b) for b in (blocked or [])}
     dropped, keep, seen = [], [], set()
     for r in rows:
         if r["ticker"] in seen:
@@ -652,9 +669,9 @@ def size(rows, cfg, budget=None, prices=None, whole=None, cents=False, top=None)
         raise SizeError("max_position_pct must be above 0 and at most 100")
     if whole is None:
         whole = not c.get("fractional", True)
-    prices = prices or {}
+    prices = {market.base_symbol(prof, k): v for k, v in (prices or {}).items()}
 
-    keep, dropped = normalise(rows, c.get("blocked"), top)
+    keep, dropped = normalise(rows, c.get("blocked"), top, p=prof)
     if not keep:
         raise SizeError("nothing to size: no weights left after the blocked list")
 
@@ -838,14 +855,14 @@ def run_plan(a, cfg, cfg_notices=()):
             limit = _f(a.limit)
             if limit is None or limit <= 0:
                 raise SizeError("--limit wants a price, like --limit 364.00")
-    sym = str((plan or {}).get("symbol") or "").upper()
+    sym = market.base_symbol(p, (plan or {}).get("symbol"))
     notes, price = list(cfg_notices), None
     ppath = a.prices or ("trader/prices.json" if os.path.exists("trader/prices.json") else None)
     if ppath and limit is None and sym:
         pdoc = read_json(ppath, "prices")
-        px, t, fresh = fresh_price(pdoc, sym, now)
+        px, t, fresh = fresh_price(pdoc, sym, now, p=p)
         if plan.get("prev_close") is None:
-            pc = ((pdoc.get("detail") or {}).get(sym) or {}).get("prev_close")
+            pc = (_lookup(pdoc.get("detail"), sym, p) or {}).get("prev_close")
             if pc is not None:
                 plan = dict(plan, prev_close=pc)
         if px is not None and fresh:
@@ -879,22 +896,22 @@ def run_plan(a, cfg, cfg_notices=()):
 def run_weights(a, cfg, cfg_notices=()):
     for n in cfg_notices:
         print("note: " + n, file=sys.stderr)
+    p = market.from_config(cfg)
     source = ""
     if a.weights:
-        rows = parse_weights(weights_from_arg(a.weights))
+        rows = parse_weights(weights_from_arg(a.weights, p=p), p=p)
     else:
         data = read_json(a.targets, "weights file")
-        rows = parse_weights(data)
+        rows = parse_weights(data, p=p)
         if isinstance(data, dict):
             source = data.get("source", "")
-    prices = load_prices(a.prices)
+    prices = load_prices(a.prices, p=p)
     if not prices and os.path.exists("trader/prices.json") and not a.prices:
-        prices = load_prices("trader/prices.json")
+        prices = load_prices("trader/prices.json", p=p)
     whole = True if a.whole_shares else None
     result = size(rows, cfg, a.budget, prices, whole, a.cents, a.top)
     orders = orders_from(result, source)
     if a.write:
-        p = market.from_config(cfg)
         write_orders(a.write, orders, cfg, source, parse_now(a.now, p=p))
     if a.json:
         print(json.dumps({"result": result, "orders": orders}, indent=2))

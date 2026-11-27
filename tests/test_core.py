@@ -177,6 +177,15 @@ class CoreTest(unittest.TestCase):
         self.assertEqual(s["lots"], 1)
         self.assertEqual(len(s["notices"]), 1)
 
+    def test_base_symbol(self):
+        idx = market.load("idx")
+        self.assertEqual(market.base_symbol(idx, "bbca.jk"), "BBCA")
+        self.assertEqual(market.base_symbol(idx, " BBCA.JK "), "BBCA")
+        self.assertEqual(market.base_symbol(idx, "BBCA"), "BBCA")
+        self.assertEqual(market.base_symbol(idx, ".JK"), ".JK")
+        self.assertEqual(market.base_symbol(idx, None), "")
+        self.assertEqual(market.base_symbol({"yahoo_suffix": ""}, "BRK.B"), "BRK.B")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -399,7 +399,7 @@ class IdxExitTest(unittest.TestCase):
             "plan", "--config", self.cfg, "--from", epath, "--now", "2026-11-23 09:40", "--write", ppath,
         ])
         self.assertEqual(code, 0, err)
-        self.assertIn("Exit plan: BBCA.JK long", out)
+        self.assertIn("Exit plan: BBCA long", out)
         self.assertIn("the price can gap after the lunch break", out)
 
 
@@ -893,7 +893,8 @@ class DefaultIdxWithoutMarketKey(unittest.TestCase):
                     "--now", "2026-11-23 09:35",
                 ])
             self.assertEqual(rc, 0)
-            self.assertIn("BBCA.JK", buf.getvalue())
+            self.assertIn("BBCA", buf.getvalue())
+            self.assertNotIn("BBCA.JK", buf.getvalue())
             self.assertIn("WIB", buf.getvalue())
             self.assertIn("Rp ", buf.getvalue())
 
@@ -981,6 +982,112 @@ class IdxNewsRssTest(unittest.TestCase):
             self.assertTrue(all(it["touches"] == ["BBCA"] for it in data["items"]))
             self.assertEqual(len(data["moves"]), 1)
             self.assertEqual(data["moves"][0]["ticker"], "BBCA")
+
+
+class IdxPipelineMoneySafetyTest(unittest.TestCase):
+    def _run_mod(self, mod, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = mod.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_pipeline_symbol_and_blocked_real_files(self):
+        exitp = load("trader-exit", "exit")
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                os.makedirs("trader", exist_ok=True)
+                with open("trader/config.json", "w", encoding="utf-8") as fh:
+                    json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}, fh)
+                code, _, err = self._run_mod(entry, [
+                    "check", "BBCA", "--offline", BBCA_5M, "--now", "2026-11-26 10:30", "--write",
+                ])
+                self.assertEqual(code, 0, err)
+                code, _, err = self._run_mod(exitp, [
+                    "plan", "--from", "trader/entry.json", "--now", "2026-11-26 10:30", "--write",
+                ])
+                self.assertEqual(code, 0, err)
+                code, _, err = self._run_mod(size, ["--now", "2026-11-26 10:30", "--write"])
+                self.assertEqual(code, 0, err)
+                code, _, err = self._run_mod(check, ["--now", "2026-11-26 10:30"])
+                self.assertEqual(code, 0, err)
+
+                with open("trader/entry.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["symbol"], "BBCA")
+                with open("trader/plan.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["symbol"], "BBCA")
+                with open("trader/orders.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["orders"][0]["symbol"], "BBCA")
+                with open("trader/state/risk.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["results"][0]["symbol"], "BBCA")
+
+                # (b) blocked: ["BBCA"] must block in check.py and refuse in size.py
+                with open("trader/config.json", "w", encoding="utf-8") as fh:
+                    json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000,
+                               "blocked": ["BBCA"]}, fh)
+                code, out, err = self._run_mod(check, ["--now", "2026-11-26 10:30"])
+                self.assertEqual(code, 1, out)
+                with open("trader/state/risk.json", encoding="utf-8") as fh:
+                    r0 = json.load(fh)["results"][0]
+                self.assertEqual(r0["verdict"], "BLOCK")
+                self.assertTrue(any(r.startswith("blocked:") for r in r0["reasons"]), r0["reasons"])
+                code_s, _, err_s = self._run_mod(size, ["--now", "2026-11-26 10:30", "--write"])
+                self.assertEqual(code_s, 1)
+                self.assertIn("blocked", err_s)
+            finally:
+                os.chdir(cwd)
+
+    def test_jk_suffix_input_works_at_every_boundary(self):
+        exitp = load("trader-exit", "exit")
+        alerts_mod = load("trader-alerts", "alerts")
+        ticket_mod = load("trader-broker", "ticket")
+        idx = market.load("idx")
+        with tempfile.TemporaryDirectory() as d:
+            cwd = os.getcwd()
+            os.chdir(d)
+            try:
+                os.makedirs("trader", exist_ok=True)
+                with open("trader/config.json", "w", encoding="utf-8") as fh:
+                    json.dump({"market": "idx", "budget": 10000000, "max_loss_per_trade": 100000}, fh)
+                self.assertEqual(self._run_mod(entry, [
+                    "check", "bbca.jk", "--offline", BBCA_5M, "--now", "2026-11-26 10:30", "--write",
+                ])[0], 0)
+                self.assertEqual(self._run_mod(exitp, [
+                    "plan", "--from", "trader/entry.json", "--now", "2026-11-26 10:30", "--write",
+                ])[0], 0)
+                self.assertEqual(self._run_mod(size, ["--now", "2026-11-26 10:30", "--write"])[0], 0)
+                self.assertEqual(self._run_mod(check, ["--now", "2026-11-26 10:30"])[0], 0)
+                self.assertEqual(self._run_mod(ticket_mod, [
+                    "approve", "--index", "1", "--reply", "yes BBCA.JK", "--now", "2026-11-26 10:30",
+                ])[0], 0)
+                self.assertEqual(self._run_mod(ticket_mod, [
+                    "fill", "--symbol", "bbca.jk", "--side", "buy", "--qty", "100", "--price", "5875",
+                    "--now", "2026-11-26 10:30",
+                ])[0], 0)
+                with open("trader/portfolio.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["positions"][0]["ticker"], "BBCA")
+                self.assertEqual(self._run_mod(ticket_mod, [
+                    "flatten", "--symbol", "BBCA.JK", "--now", "2026-11-26 10:30",
+                ])[0], 0)
+                with open("trader/orders.json", encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh)["orders"][0]["symbol"], "BBCA")
+                # check() also normalizes legacy BBCA.JK keys in prices.json and portfolio.json
+                res = check.check(
+                    [{"symbol": "BBCA", "side": "sell", "qty": "100", "type": "market", "time_in_force": "day"}],
+                    {"market": "idx", "budget": 10000000},
+                    portfolio={"cash": 9000000, "positions": [{"ticker": "BBCA.JK", "shares": 100}]},
+                    prices={"BBCA.JK": 5900},
+                    now=check.parse_now("2026-11-26 10:30", p=idx),
+                )
+                self.assertEqual(res["results"][0]["kind"], "exit")
+                # alerts.write_prices normalizes keys
+                p_path = os.path.join(d, "trader", "prices.json")
+                alerts_mod.write_prices(p_path, {"BBCA.JK": {"price": 5900}}, check.parse_now("2026-11-26 10:30", p=idx), "yahoo", p=idx)
+                with open(p_path, encoding="utf-8") as fh:
+                    self.assertIn("BBCA", json.load(fh)["prices"])
+            finally:
+                os.chdir(cwd)
 
 
 if __name__ == "__main__":

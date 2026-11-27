@@ -668,7 +668,7 @@ def normalize_plan(raw, src="flags", p=None):
         prof = p or (market.load(raw["market"]) if raw.get("market") else _IDX)
     except ValueError as e:
         raise TMError(str(e))
-    sym = str(raw.get("symbol") or "").strip().upper()
+    sym = market.base_symbol(prof, raw.get("symbol"))
     if not re.match(r"^[A-Z][A-Z0-9.\-]{0,9}$", sym):
         raise TMError("the plan needs a ticker symbol, got %r" % raw.get("symbol"))
     side = str(raw.get("side") or "buy").lower()

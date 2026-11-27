@@ -183,7 +183,7 @@ def plain_parts(order, p=None, cfg=None):
     """The ticket in plain words, one part per line."""
     prof = p or _IDX
     side = str(order.get("side", "")).upper()
-    sym = order.get("symbol", "?")
+    sym = market.base_symbol(prof, order.get("symbol")) or "?"
     typ = str(order.get("type", "market"))
     lot = int(prof.get("lot", 100))
     q = _f(order.get("qty"))
@@ -250,9 +250,10 @@ def parse_yes(reply, order, batch_symbols=(), p=None, cfg=None):
         return False, "a yes covers one order at a time, not a batch"
     if DOUBT_WORDS & set(words[1:]):
         return False, "the reply has a condition or a doubt in it; ask again"
-    sym = str(order.get("symbol", "")).upper()
-    tokens = set(re.findall(r"[A-Z][A-Z.\-]{0,6}", raw.upper()))
-    others = {s.upper() for s in batch_symbols} - {sym}
+    prof = p or _IDX
+    sym = market.base_symbol(prof, order.get("symbol"))
+    tokens = {market.base_symbol(prof, tok) for tok in re.findall(r"[A-Z][A-Z.\-]{0,6}", raw.upper())}
+    others = {market.base_symbol(prof, s) for s in batch_symbols} - {sym}
     named = tokens & others
     if named:
         return False, "the reply names %s, but this order is for %s" % (", ".join(sorted(named)), sym)
@@ -360,7 +361,8 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=
         if not budget:
             raise TicketError("no %s yet and no budget in the config to start it from" % portfolio_path)
         pf = {"cash": float(budget), "positions": []}
-    symbol = symbol.upper()
+    prof = p or market.from_config(cfg)
+    symbol = market.base_symbol(prof, symbol)
     qty, price = float(qty), float(price)
     if qty <= 0 or price <= 0:
         raise TicketError("a fill needs a positive qty and price")
@@ -374,12 +376,14 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=
     cost = round(qty * price, 2)
     pos = None
     for pr in pf.setdefault("positions", []):
-        if str(pr.get("ticker", "")).upper() == symbol:
+        if market.base_symbol(prof, pr.get("ticker") or pr.get("symbol")) == symbol:
             pos = pr
     if side == "buy":
         if pos is None:
             pos = {"ticker": symbol, "shares": 0.0, "lots": []}
             pf["positions"].append(pos)
+        else:
+            pos["ticker"] = symbol
         lots = pos.setdefault("lots", [])
         lots.append({"id": "%s-%d" % (symbol, len(lots) + 1), "date": date, "shares": qty, "cost": round(cost + fee, 2)})
         pos["shares"] = round(float(pos.get("shares", 0)) + qty, 6)
@@ -409,11 +413,13 @@ def apply_fill(portfolio_path, cfg, symbol, side, qty, price, date, p=None, fee=
 def log_fill(state_path, now, today, symbol, side, qty, price, p=None, fee=None):
     """A fill in the log."""
     state = load_state(state_path)
-    px_s = _money(price, p or _IDX)
+    prof = p or _IDX
+    sym = market.base_symbol(prof, symbol)
+    px_s = _money(price, prof)
     entry = {
-        "at": local_iso(now, p=p), "date": today, "status": "filled", "symbol": symbol.upper(), "side": side,
+        "at": local_iso(now, p=p), "date": today, "status": "filled", "symbol": sym, "side": side,
         "qty": _str_num(float(qty)), "price": float(price),
-        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), symbol.upper(), px_s)}
+        "plain": "%s %s %s at %s" % (side.upper(), _str_num(float(qty)), sym, px_s)}
     if fee is not None:
         entry["fee"] = fee
     state.setdefault("orders", []).append(entry)
@@ -483,7 +489,7 @@ def cmd_approve(a):
         return 1
     loss, stop = max_loss(order, p=p, cfg=cfg)
     rec = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fingerprint(order),
-           "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
+           "symbol": market.base_symbol(p, order.get("symbol")), "side": order.get("side"),
            "qty": order.get("qty"), "kind": kind_of(order, rv), "max_loss": loss, "stop": stop,
            "plain": plain(order, p=p, cfg=cfg), "status": "approved", "reply": a.reply,
            "paper": bool(cfg.get("paper", True)), "broker": "manual"}
@@ -500,7 +506,7 @@ def cmd_decline(a):
     order = _pick(orders, a.index)
     p = market.from_config(cfg)
     rec = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fingerprint(order),
-           "symbol": str(order.get("symbol", "")).upper(), "side": order.get("side"),
+           "symbol": market.base_symbol(p, order.get("symbol")), "side": order.get("side"),
            "plain": plain(order, p=p, cfg=cfg), "status": "declined", "reply": a.reply or "no"}
     state.setdefault("orders", []).append(rec)
     write_json(a.state, state)
@@ -516,7 +522,8 @@ def cmd_result(a):
     if not rec or rec.get("status") != "approved":
         raise TicketError("order %d has no yes recorded today; a result can only follow an approval" % a.index)
     p = market.from_config(cfg)
-    new = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fp, "symbol": rec["symbol"],
+    sym = market.base_symbol(p, rec.get("symbol"))
+    new = {"at": local_iso(now, p=p), "date": today, "index": a.index, "fingerprint": fp, "symbol": sym,
            "side": rec["side"], "plain": rec["plain"], "status": a.status}
     for k in ("qty", "kind", "max_loss", "stop"):
         if rec.get(k) is not None:
@@ -529,13 +536,13 @@ def cmd_result(a):
     write_json(a.state, state)
     print("Recorded order %d as %s." % (a.index, a.status))
     if a.status == "placed" and a.filled_qty and a.filled_price:
-        _, fee = apply_fill(a.portfolio, cfg, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, today, p, a.fee)
+        _, fee = apply_fill(a.portfolio, cfg, sym, rec["side"], a.filled_qty, a.filled_price, today, p, a.fee)
         shown = fee if (fee or a.fee is not None) else None
-        log_fill(a.state, now, today, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, p=p, fee=shown)
+        log_fill(a.state, now, today, sym, rec["side"], a.filled_qty, a.filled_price, p=p, fee=shown)
         print("Added the fill to %s%s." % (a.portfolio, (" (fee %s)" % _money(fee, p)) if shown is not None else ""))
     elif a.status == "placed":
         print("When it fills, record it: ticket.py fill --symbol %s --side %s --qty Q --price P"
-              % (rec["symbol"], rec["side"]))
+              % (sym, rec["side"]))
         if rec.get("kind") == "entry" and is_bracket(order):
             print("When the stop-loss or the take-profit fills later, record that sell the same way.")
     return 0
@@ -548,11 +555,12 @@ def cmd_fill(a):
     date = a.date or market.to_local(p, now).date().isoformat()
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         raise TicketError("--date wants a date like 2026-10-19")
-    pf, fee = apply_fill(a.portfolio, cfg, a.symbol, a.side, a.qty, a.price, date, p, a.fee)
+    sym = market.base_symbol(p, a.symbol)
+    pf, fee = apply_fill(a.portfolio, cfg, sym, a.side, a.qty, a.price, date, p, a.fee)
     shown = fee if (fee or a.fee is not None) else None
-    log_fill(a.state, now, date, a.symbol, a.side, a.qty, a.price, p=p, fee=shown)
+    log_fill(a.state, now, date, sym, a.side, a.qty, a.price, p=p, fee=shown)
     fee_s = (", fee %s" % _money(fee, p)) if shown is not None else ""
-    print("Recorded %s %s %s at %s on %s in %s%s. Cash now %s." % (a.side, a.qty, a.symbol.upper(),
+    print("Recorded %s %s %s at %s on %s in %s%s. Cash now %s." % (a.side, a.qty, sym,
                                                                   _money(a.price, p), date, a.portfolio,
                                                                   fee_s, _money(pf["cash"], p)))
     return 0
@@ -561,7 +569,7 @@ def cmd_fill(a):
 def cmd_flatten(a):
     cfg = read_json(a.config, "config", required=False) or {}
     p = market.from_config(cfg)
-    sym = a.symbol.strip().upper()
+    sym = market.base_symbol(p, a.symbol)
     now, today = _clock(a, p=p)
     source = "your broker app"
     if a.qty is not None:
@@ -570,8 +578,8 @@ def cmd_flatten(a):
             raise TicketError("--qty wants the number of shares you hold, like --qty 300")
     else:
         pf = read_json(a.portfolio, "portfolio", required=False) or {}
-        qty = sum(_f(p.get("shares", p.get("qty"))) or 0 for p in pf.get("positions", [])
-                  if str(p.get("ticker") or p.get("symbol") or "").upper() == sym)
+        qty = sum(_f(pos.get("shares", pos.get("qty"))) or 0 for pos in pf.get("positions", [])
+                  if market.base_symbol(p, pos.get("ticker") or pos.get("symbol")) == sym)
         source = a.portfolio
         if qty <= 1e-9:
             raise TicketError("nothing to flatten: no %s shares in %s. Check your broker app "
@@ -579,7 +587,7 @@ def cmd_flatten(a):
     plan = read_json(a.plan, "plan", required=False) or {}
     tz = p.get("tz_label") or p.get("timezone") or "WIB"
     default_flat = (p.get("defaults") or {}).get("flat_by") or "15:45"
-    flat_by = (plan.get("flat_by") if str(plan.get("symbol", "")).upper() == sym else None) \
+    flat_by = (plan.get("flat_by") if market.base_symbol(p, plan.get("symbol")) == sym else None) \
         or cfg.get("flat_by") or default_flat
     order = {"symbol": sym, "side": "sell", "qty": _str_num(qty), "type": "market", "time_in_force": "day",
              "market": p["id"],

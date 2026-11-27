@@ -277,9 +277,18 @@ MONEY_LIMIT_ALIASES = (
 )
 
 
+def base_symbol(p, sym):
+    """Normalize `sym` to uppercase and strip profile `p`'s yahoo_suffix (e.g. '.JK')."""
+    s = str(sym or "").strip().upper()
+    suf = ((p or {}).get("yahoo_suffix") or "").upper()
+    if suf and len(s) > len(suf) and s.endswith(suf):
+        return s[:-len(suf)]
+    return s
+
+
 def yahoo_symbol(p, sym):
     """Format `sym` for Yahoo Finance using profile `p`'s suffix (e.g. '.JK' for IDX)."""
-    s = str(sym).upper()
+    s = str(sym).strip().upper()
     suf = (p or {}).get("yahoo_suffix") or ""
     if suf:
         return s if s.endswith(suf.upper()) else s + suf

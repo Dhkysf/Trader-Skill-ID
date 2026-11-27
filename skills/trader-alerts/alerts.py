@@ -248,7 +248,7 @@ def get_quotes(symbols, source="yahoo", offline=None, pause=PAUSE, p=None):
         raise AlertError("unknown quote source %r: use yahoo" % source)
     quotes, errors = {}, []
     for i, sym in enumerate(symbols):
-        sym = sym.upper()
+        sym = market.base_symbol(prof, sym)
         try:
             if offline:
                 text = _offline_text(offline, source, sym, p=prof)
@@ -262,7 +262,8 @@ def get_quotes(symbols, source="yahoo", offline=None, pause=PAUSE, p=None):
     return quotes, errors
 
 
-def write_prices(path, quotes, now_utc, source):
+def write_prices(path, quotes, now_utc, source, p=None):
+    prof = p or _IDX
     old = {}
     if os.path.exists(path):
         try:
@@ -270,13 +271,14 @@ def write_prices(path, quotes, now_utc, source):
                 old = json.load(fh)
         except (ValueError, OSError):
             old = {}
-    prices = dict(old.get("prices", {}))
-    detail = dict(old.get("detail", {}))
+    prices = {market.base_symbol(prof, k): v for k, v in (old.get("prices") or {}).items()}
+    detail = {market.base_symbol(prof, k): v for k, v in (old.get("detail") or {}).items()}
     stamp = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     for s, q in quotes.items():
-        prices[s] = q["price"]
-        detail[s] = {"prev_close": q.get("prev_close"), "time": q.get("time"), "source": q.get("source"),
-                     "fetched": stamp}
+        bs = market.base_symbol(prof, s)
+        prices[bs] = q["price"]
+        detail[bs] = {"prev_close": q.get("prev_close"), "time": q.get("time"), "source": q.get("source"),
+                      "fetched": stamp}
     doc = {"as_of": stamp, "source": source,
            "note": ("Delayed quotes for alerts and sizing checks. Your broker's price is the one that fills. "
                     "detail.fetched is when each price was read."),
@@ -396,14 +398,14 @@ def evaluate(rules, quotes, status, state, now_utc, p=None):
                     msg += ", the market closes at %s." % status["closes"]
                 else:
                     msg += ", the market has closed."
-                sym = str(r.get("symbol") or "").upper()
+                sym = market.base_symbol(prof, r.get("symbol"))
                 if sym:
                     msg += (" If %s is still open, close it: trader-broker flatten --symbol %s builds the sell "
                             "ticket, then trader-risk and your yes." % (sym, sym))
                 rings.append({"id": rid, "symbol": sym, "message": msg})
                 rung[rid] = stamp
             continue
-        sym = r["symbol"].upper()
+        sym = market.base_symbol(prof, r["symbol"])
         q = quotes.get(sym)
         if not q:
             continue
@@ -446,7 +448,7 @@ def rules_from_plan(plan, cfg_flat_by=None, p=None):
         raise AlertError("the plan has no symbol (run trader-exit first)")
     prof = p or (market.load(plan["market"]) if plan.get("market") else _IDX)
     default_flat = (prof.get("defaults") or {}).get("flat_by") or "15:45"
-    sym = str(plan["symbol"]).upper()
+    sym = market.base_symbol(prof, plan["symbol"])
     out = []
     for key, typ, word in (("stop", "stop", "plan stop"), ("target", "target", "plan target")):
         v = plan.get(key)
@@ -468,14 +470,15 @@ def rules_from_plan(plan, cfg_flat_by=None, p=None):
 
 # ---------------------------------------------------------------- commands
 
-def holdings(a):
+def holdings(a, p=None):
+    prof = p or _IDX
     syms = []
     pf = _read(a.portfolio, {})
-    for p in pf.get("positions", []) if isinstance(pf, dict) else []:
-        syms.append(str(p.get("ticker") or p.get("symbol") or "").upper())
+    for pos in pf.get("positions", []) if isinstance(pf, dict) else []:
+        syms.append(market.base_symbol(prof, pos.get("ticker") or pos.get("symbol")))
     plan = _read(a.plan, {})
     if isinstance(plan, dict) and plan.get("symbol"):
-        syms.append(str(plan["symbol"]).upper())
+        syms.append(market.base_symbol(prof, plan["symbol"]))
     return [s for s in syms if s]
 
 
@@ -512,14 +515,14 @@ def cmd_clock(a):
 
 
 def cmd_quote(a):
-    syms = _dedupe([s.upper() for s in a.symbols] + (holdings(a) if a.holdings else []))
+    p = market.from_config(getattr(a, "config", None))
+    syms = _dedupe([market.base_symbol(p, s) for s in a.symbols] + (holdings(a, p=p) if a.holdings else []))
     if not syms:
         raise AlertError("which tickers? alerts.py quote BBCA BBRI, or --holdings")
-    p = market.from_config(getattr(a, "config", None))
     now = parse_now(a.now, p=p)
     quotes, errors = get_quotes(syms, a.source, a.offline, p=p)
     if a.write and quotes:
-        write_prices(a.write, quotes, now, a.source)
+        write_prices(a.write, quotes, now, a.source, p=p)
     if a.json:
         print(json.dumps({"quotes": quotes, "errors": errors}, indent=2))
     else:
@@ -548,14 +551,14 @@ def cmd_check(a):
     now = parse_now(a.now, p=p)
     status = market_status(now, p=p)
     watched = [r for r in rules if active(r, status["date"])]
-    syms = _dedupe([str(r.get("symbol", "")).upper() for r in watched if r.get("type") not in NO_QUOTE])
+    syms = _dedupe([market.base_symbol(p, r.get("symbol")) for r in watched if r.get("type") not in NO_QUOTE])
     quotes, errors = (get_quotes(syms, a.source, a.offline, p=p) if syms else ({}, []))
     state = _read(a.state, {})
     rings, state = evaluate(rules, quotes, status, state, now, p=p)
     if not a.no_write:
         _write(a.state, state)
         if quotes:
-            write_prices(a.prices_out, quotes, now, a.source)
+            write_prices(a.prices_out, quotes, now, a.source, p=p)
     if a.json:
         print(json.dumps({"market": status, "rings": rings, "errors": errors,
                           "quotes": {s: q["price"] for s, q in quotes.items()}}, indent=2))
@@ -602,6 +605,8 @@ def cmd_add(a):
         print("Run alerts.py check every few minutes while the trade is open (a scheduled task or /loop). "
               "Free quotes are delayed; the broker's bracket orders are what actually stop you out.")
         return 0
+    cfg = _read(a.config, {}) if getattr(a, "config", None) else {}
+    p = market.from_config(cfg)
     if a.opening_bell:
         rule = {"id": a.id or "opening-bell", "type": "opening_bell"}
     elif a.at:
@@ -610,13 +615,13 @@ def cmd_add(a):
         rule = {"id": a.id or ("time-%s" % a.at.replace(":", "")), "type": "time", "at": a.at,
                 "label": a.label or "time alert"}
         if a.symbol:
-            rule["symbol"] = a.symbol.upper()
+            rule["symbol"] = market.base_symbol(p, a.symbol)
         if a.before_close:
             rule["before_close"] = True
     else:
         if not a.symbol:
             raise AlertError("--symbol is required (or --from-plan, --at, --opening-bell)")
-        sym = a.symbol.upper()
+        sym = market.base_symbol(p, a.symbol)
         if a.above is not None:
             rule = {"type": "above", "price": a.above}
         elif a.below is not None:

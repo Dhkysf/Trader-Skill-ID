@@ -270,7 +270,7 @@ def yahoo_get(path):
     raise EntryError("Yahoo did not answer (%s on query2 and query1): wait a minute and try again" % last)
 
 
-def parse_chart(text, sym):
+def parse_chart(text, sym, p=None):
     """Yahoo chart JSON v8 -> {symbol, meta, bars, prev_close, data_time}.
     Bars with a null close are dropped here; off-grid ticks later."""
     try:
@@ -297,7 +297,8 @@ def parse_chart(text, sym):
         o, h, lo = at("open", i), at("high", i), at("low", i)
         bars.append({"t": int(t), "o": float(c if o is None else o), "h": float(c if h is None else h),
                      "l": float(c if lo is None else lo), "c": float(c), "v": int(at("volume", i) or 0)})
-    return {"symbol": str(meta.get("symbol") or sym).upper(), "meta": meta, "bars": bars,
+    prof = p or _IDX
+    return {"symbol": market.base_symbol(prof, meta.get("symbol") or sym), "meta": meta, "bars": bars,
             "prev_close": meta.get("previousClose") or meta.get("chartPreviousClose"),
             "data_time": meta.get("regularMarketTime")}
 
@@ -312,7 +313,9 @@ def read_text(path):
 
 def offline_file(path, sym, p=None):
     if os.path.isdir(path):
-        ysym = yahoo_symbol(sym, p)
+        prof = p or _IDX
+        sym = market.base_symbol(prof, sym)
+        ysym = yahoo_symbol(sym, prof)
         for name in (sym + ".json", sym + ".json.gz", ysym + ".json", ysym + ".json.gz"):
             fp = os.path.join(path, name)
             if os.path.exists(fp):
@@ -325,8 +328,8 @@ def offline_file(path, sym, p=None):
 
 def get_chart(sym, interval, day=None, offline=None, today=None, p=None):
     """Bars for one ticker, from Yahoo (range=1d for today) or a saved file."""
-    sym = sym.upper()
     prof = p or _IDX
+    sym = market.base_symbol(prof, sym)
     if offline:
         f = offline_file(offline, sym, prof)
         try:
@@ -336,8 +339,8 @@ def get_chart(sym, interval, day=None, offline=None, today=None, p=None):
     else:
         today = today or market.to_local(prof, utc_now()).date()
         text = yahoo_get(chart_path(sym, chart_range(day or today, today, interval), interval, prof))
-    ch = parse_chart(text, sym)
-    if ch["symbol"] != yahoo_symbol(sym, prof):
+    ch = parse_chart(text, sym, p=prof)
+    if ch["symbol"] != sym:
         raise EntryError("the chart file holds %s, not %s" % (ch["symbol"], sym))
     gran = ch["meta"].get("dataGranularity")
     if gran and gran != interval:
@@ -429,7 +432,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
             prior_close = b["c"]
     if prior_close is not None:
         prev_close = prior_close
-    res = {"symbol": chart["symbol"], "setup": setup, "side": "buy", "date": day.isoformat(),
+    res = {"symbol": market.base_symbol(prof, chart["symbol"]), "setup": setup, "side": "buy", "date": day.isoformat(),
            "interval": interval, "or_minutes": or_minutes, "now": local.strftime("%Y-%m-%d %H:%M:%S"), "status": "waiting",
            "phase": "", "reason": "", "opening_range": None, "level": None, "trigger": None,
            "last": None, "forming": None, "min_volume_x": min_volume_x,
@@ -589,7 +592,8 @@ def entry_doc(res, now_utc):
     """trader/entry.json, the contract shape (plus a plain-words reason)."""
     t = res.get("trigger") or {}
     orr = res.get("opening_range")
-    doc = {"created_by": "trader-entry", "symbol": res["symbol"], "setup": res["setup"], "side": "buy",
+    prof = market.load(res["market"]) if res.get("market") else _IDX
+    doc = {"created_by": "trader-entry", "symbol": market.base_symbol(prof, res["symbol"]), "setup": res["setup"], "side": "buy",
            "date": res["date"], "status": res["status"], "time": t.get("time"), "bar_start": t.get("bar_start"),
            "bar_index": t.get("bar_index"), "price": t.get("price"), "level": res.get("level"),
            "interval": res["interval"],
@@ -879,7 +883,7 @@ def cmd_check(a):
     cfg = read_config(a.config)
     p = market.from_config(cfg)
     opts = _opts(a, cfg)
-    sym = a.symbol.upper()
+    sym = market.base_symbol(p, a.symbol)
     chart, now = _load(a, sym, parse_now(a.now, p=p) if a.now else None, p=p)
     res = evaluate(chart, now, **opts)
     if a.write:
@@ -898,7 +902,7 @@ def cmd_watch(a):
     cfg = read_config(a.config)
     p = market.from_config(cfg)
     opts = _opts(a, cfg)
-    sym = a.symbol.upper()
+    sym = market.base_symbol(p, a.symbol)
     if a.every <= 0:
         raise EntryError("--every must be above 0 seconds")
     start = parse_now(a.now, p=p) if a.now else None
@@ -951,7 +955,7 @@ def cmd_watchlist(a):
     now = parse_now(a.now, p=p) if a.now else None
     rows = []
     for i, h in enumerate(hits):
-        sym = str(h["symbol"]).upper()
+        sym = market.base_symbol(p, h["symbol"])
         o = dict(opts)
         if a.setup == "level" and o["level"] is None:
             o["level"] = h.get("level")
