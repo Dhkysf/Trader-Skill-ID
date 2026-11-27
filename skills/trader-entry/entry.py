@@ -113,8 +113,8 @@ def _exchange(p):
     return (p or _IDX).get("exchange") or "IDX"
 
 
-def _px(val, p=None):
-    return market.price(p or _IDX, val)
+def _px(val, p=None, symbol=None):
+    return market.price(p or _IDX, val, symbol=symbol)
 
 
 def _profile_defaults(p=None):
@@ -389,7 +389,7 @@ def early_cutoff(day, t, close_dt, open_t, std_close):
 
 
 def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=None,
-             min_volume_x=None, cfg=None, p=None):
+             min_volume_x=None, cfg=None, p=None, side="buy", session_name=None):
     """Pure function: the setup's status at now_utc from one session's bars."""
     try:
         prof = p or market.from_config(cfg)
@@ -400,7 +400,17 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         if v is not None:
             eff_cfg[k] = v
     delay_min = int(prof.get("data_delay_min") or 0)
-    pdec = max(2, market.price_decimals(prof))
+    sym = market.base_symbol(prof, chart["symbol"])
+    if prof.get("pairs"):
+        try:
+            market.require_pair(prof, sym)
+        except ValueError as e:
+            raise EntryError(str(e))
+        pdec = max(2, market.price_decimals(prof, symbol=sym))
+    else:
+        pdec = max(2, market.price_decimals(prof))
+    is_short = str(side or "buy").lower() in ("sell", "short")
+    norm_side = "sell" if is_short else "buy"
     cal_years = tuple(prof.get("calendar_years") or ())
     early_dates = (prof.get("early_close") or {}).get("dates") or {}
 
@@ -427,7 +437,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
             prior_close = b["c"]
     if prior_close is not None:
         prev_close = prior_close
-    res = {"symbol": market.base_symbol(prof, chart["symbol"]), "setup": setup, "side": "buy", "date": day.isoformat(),
+    res = {"symbol": sym, "setup": setup, "side": norm_side, "date": day.isoformat(),
            "interval": interval, "or_minutes": or_minutes, "now": local.strftime("%Y-%m-%d %H:%M:%S"), "status": "waiting",
            "phase": "", "reason": "", "opening_range": None, "level": None, "trigger": None,
            "last": None, "forming": None, "min_volume_x": min_volume_x,
@@ -435,25 +445,30 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     res.update(market=prof["id"], tz_label=_tz_label(prof), data_delay_min=delay_min)
     dt = chart.get("data_time")
     res["data_time"] = market.to_local(prof, utc_of(dt)).strftime("%Y-%m-%d %H:%M:%S") if dt else None
-    ok, why = trading_day(day, prof)
-    if not ok:
+    tw = market.trading_day_window(prof, day)
+    if not tw:
+        ok, why = trading_day(day, prof)
         res.update(status="no-data", phase="closed", reason="the %s is closed today (%s)" % (_exchange(prof), why),
                    next_open=next_open(day, prof))
         return res
-    sess = market.sessions(prof, day)
-    windows = [(datetime.datetime.combine(day, o), datetime.datetime.combine(day, c)) for o, c in sess]
+    if setup == "orb" and prof.get("orb_sessions"):
+        orb_open = market.orb_session_open(prof, session_name or "london", day)
+        windows = [(orb_open, tw[-1][1])]
+    else:
+        windows = tw
     open_dt, close_dt = windows[0][0], windows[-1][1]
-    std_raw = prof["sessions"][market._WEEKDAYS[day.weekday()]]
-    std_close = datetime.time.fromisoformat(std_raw[-1][1])
-    early = sess[-1][1] != std_close
-    before = datetime.datetime.combine(day, parse_hhmm(eff_cfg["no_entries_before"], "no_entries_before", p=prof))
+    std_raw = prof["sessions"].get(market._WEEKDAYS[day.weekday()]) or prof["sessions"].get(market._WEEKDAYS[(day - datetime.timedelta(days=1)).weekday()]) or []
+    std_close = datetime.time.fromisoformat(std_raw[-1][1]) if std_raw else close_dt.time()
+    early = close_dt.time() != std_close
+    before_s = eff_cfg.get("no_entries_before")
+    before = datetime.datetime.combine(day, parse_hhmm(before_s, "no_entries_before", p=prof)) if before_s else open_dt
     cutoff = early_cutoff(day, parse_hhmm(eff_cfg["no_entries_after"], "no_entries_after", p=prof),
-                          close_dt, sess[0][0], std_close)
+                          close_dt, open_dt.time(), std_close)
     break_min = int(eff_cfg.get("no_entries_before_break_min") or 0)
     break_buf = datetime.timedelta(minutes=break_min)
     breaks = [(windows[i][1], windows[i + 1][0]) for i in range(len(windows) - 1)]
     or_end = open_dt + datetime.timedelta(minutes=or_minutes)
-    res.update(opens=hm(sess[0][0]), closes=hm(sess[-1][1]), early_close=early_dates.get(day.isoformat()),
+    res.update(opens=hm(open_dt.time()), closes=hm(close_dt.time()), early_close=early_dates.get(day.isoformat()),
                no_entries_before=hm(before), no_entries_after=hm(cutoff))
 
     by_slot = {}
@@ -461,7 +476,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         if b["t"] % step:
             continue                       # Yahoo's live tick (10:49:45) is not a bar
         et = market.to_local(prof, utc_of(b["t"]))
-        if et.date() != day or not any(so <= et < sc for so, sc in windows):
+        if not any(so <= et < sc for so, sc in windows):
             continue
         slot = int((et - open_dt).total_seconds()) // step
         by_slot[slot] = dict(b, et=et, end=et + datetime.timedelta(seconds=step), slot=slot)
@@ -507,7 +522,7 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
         if not or_bars:
             res.update(status="no-data", phase="open", reason="Yahoo sent no bars for the opening range")
             return res
-        lvl = max(b["h"] for b in or_bars)
+        lvl = min(b["l"] for b in or_bars) if is_short else max(b["h"] for b in or_bars)
     else:
         lvl = float(level)
     res["level"] = r2(lvl, pdec)
@@ -517,11 +532,12 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     for b in bars:
         if b["slot"] < first_slot or b["end"] < before or b["end"] > cutoff:
             continue
+        beyond = (b["c"] < lvl) if is_short else (b["c"] > lvl)
         if break_min > 0 and any(bs - break_buf < b["end"] <= bs for bs, _ in breaks):
-            if b["c"] > lvl:
+            if beyond:
                 pre_break.append(b)
             continue
-        if b["c"] > lvl:
+        if beyond:
             vx = (b["v"] / avg_vol) if avg_vol else None
             if min_volume_x and (vx is None or vx < min_volume_x):
                 thin.append(b)
@@ -530,16 +546,20 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
             break
     last = bars[-1] if bars else None
     if last:
+        vs_pct = 100.0 * (1 - last["c"] / lvl) if is_short else 100.0 * (last["c"] / lvl - 1)
         res["last"] = {"bar_start": hm(last["et"]), "close": r2(last["c"], pdec),
-                       "vs_level_pct": r2(100.0 * (last["c"] / lvl - 1))}
+                       "vs_level_pct": r2(vs_pct)}
 
     if trig:
         vx = (trig["v"] / avg_vol) if avg_vol else None
+        dir_word = "below" if is_short else "above"
+        range_word = "the range low" if is_short else "the range high"
+        pct_over = 100.0 * (1 - trig["c"] / lvl) if is_short else 100.0 * (trig["c"] / lvl - 1)
         res.update(status="triggered", phase="open" if local < close_dt else "after-close",
-                   reason="the %s bar closed above %s" % (short(trig["et"]), "the range high" if setup == "orb" else "the level"))
+                   reason="the %s bar closed %s %s" % (short(trig["et"]), dir_word, range_word if setup == "orb" else "the level"))
         res["trigger"] = {"time": ampm(trig["end"]), "close_time": hm(trig["end"]), "bar_start": hm(trig["et"]),
                           "bar_index": trig["slot"], "price": r2(trig["c"], pdec), "close": trig["c"],
-                          "volume": trig["v"], "volume_x": r2(vx), "pct_over": r2(100.0 * (trig["c"] / lvl - 1))}
+                          "volume": trig["v"], "volume_x": r2(vx), "pct_over": r2(pct_over)}
         res["minutes_since"] = int((local - trig["end"]).total_seconds() // 60)
         if dt and utc_of(dt) < market.local_to_utc(prof, trig["end"]):
             res["data_note"] = ("Yahoo's last trade is %s, before this bar closed: its close can still move a tick or two"
@@ -553,28 +573,33 @@ def evaluate(chart, now_utc, setup="orb", or_minutes=15, interval="5m", level=No
     if not bars:
         res.update(status="no-data", phase="open", reason="Yahoo sent no bars for %s yet" % day.isoformat())
         return res
-    what = "close above the range high %s" % _px(lvl, prof) if setup == "orb" else "close above %s" % _px(lvl, prof)
+    what = ("close %s %s %s" % ("below" if is_short else "above", "the range low" if is_short else "the range high", _px(lvl, prof, symbol=sym))
+            if setup == "orb" else "close %s %s" % ("below" if is_short else "above", _px(lvl, prof, symbol=sym)))
     if local >= cutoff and not (pending and pending["end"] <= cutoff):
         res.update(status="expired", phase="after-close" if local >= close_dt else "after-cutoff",
                    reason="no %s by %s, the last time for a new entry%s" % (
                        what, short(cutoff), " (early close today)" if early else ""))
         return res
     res["phase"] = "open"
-    if last["c"] > lvl and last in thin:
-        res["reason"] = "the %s bar closed above at %s but on %.2fx the range's volume, under your %.2fx" % (
-            short(last["et"]), _px(last["c"], prof), last["v"] / avg_vol if avg_vol else 0, min_volume_x)
-    elif last["c"] > lvl and last["end"] < before:
-        res["reason"] = "the %s bar closed above at %s, but no entries before %s (config)" % (
-            short(last["et"]), _px(last["c"], prof), short(before))
-    elif last["c"] > lvl and last in pre_break:
-        res["reason"] = "the %s bar closed above at %s, but within %d min of the lunch break" % (
-            short(last["et"]), _px(last["c"], prof), break_min)
+    beyond_last = (last["c"] < lvl) if is_short else (last["c"] > lvl)
+    if beyond_last and last in thin:
+        res["reason"] = "the %s bar closed %s at %s but on %.2fx the range's volume, under your %.2fx" % (
+            short(last["et"]), "below" if is_short else "above", _px(last["c"], prof, symbol=sym),
+            last["v"] / avg_vol if avg_vol else 0, min_volume_x)
+    elif beyond_last and last["end"] < before:
+        res["reason"] = "the %s bar closed %s at %s, but no entries before %s (config)" % (
+            short(last["et"]), "below" if is_short else "above", _px(last["c"], prof, symbol=sym), short(before))
+    elif beyond_last and last in pre_break:
+        res["reason"] = "the %s bar closed %s at %s, but within %d min of the lunch break" % (
+            short(last["et"]), "below" if is_short else "above", _px(last["c"], prof, symbol=sym), break_min)
     else:
-        gap = lvl - last["c"]
+        gap = (last["c"] - lvl) if is_short else (lvl - last["c"])
+        vs_pct = 100.0 * (1 - last["c"] / lvl) if is_short else 100.0 * (last["c"] / lvl - 1)
         res["reason"] = "last close %s (%s bar), %s %s %s (%+.2f%%)" % (
-            _px(last["c"], prof), short(last["et"]), _px(abs(gap), prof), "under" if gap >= 0 else "over",
-            "the range high %s" % _px(lvl, prof) if setup == "orb" else "the level %s" % _px(lvl, prof),
-            100.0 * (last["c"] / lvl - 1))
+            _px(last["c"], prof, symbol=sym), short(last["et"]), _px(abs(gap), prof, symbol=sym),
+            ("over" if is_short else "under") if gap >= 0 else ("under" if is_short else "over"),
+            ("the range low %s" if is_short else "the range high %s") % _px(lvl, prof, symbol=sym) if setup == "orb" else "the level %s" % _px(lvl, prof, symbol=sym),
+            vs_pct)
     return res
 
 
@@ -588,7 +613,7 @@ def entry_doc(res, now_utc):
     t = res.get("trigger") or {}
     orr = res.get("opening_range")
     prof = market.load(res["market"]) if res.get("market") else _IDX
-    doc = {"created_by": "trader-entry", "symbol": market.base_symbol(prof, res["symbol"]), "setup": res["setup"], "side": "buy",
+    doc = {"created_by": "trader-entry", "symbol": market.base_symbol(prof, res["symbol"]), "setup": res["setup"], "side": res.get("side", "buy"),
            "date": res["date"], "status": res["status"], "time": t.get("time"), "bar_start": t.get("bar_start"),
            "bar_index": t.get("bar_index"), "price": t.get("price"), "level": res.get("level"),
            "interval": res["interval"],
@@ -620,7 +645,8 @@ SHORT = {"pre-open": "not open", "forming": "forming", "lunch-break": "lunch", "
 def setup_name(res, p=None):
     if res["setup"] == "orb":
         return "opening-range breakout (%d-minute range)" % res["or_minutes"]
-    return "close above %s" % _px(res["level"], p) if res["level"] is not None else "close above a level"
+    sym = res.get("symbol")
+    return "close above %s" % _px(res["level"], p, symbol=sym) if res["level"] is not None else "close above a level"
 
 
 def describe(res):
@@ -641,22 +667,24 @@ def describe(res):
         start = datetime.datetime.strptime(res["opens"], "%H:%M")
         end = start + datetime.timedelta(minutes=orr["minutes"])
         out.append("Opening range %s-%s: high %s, low %s (%d of %d bars%s)." % (
-            short(start), short(end), _px(orr["high"], p), _px(orr["low"], p), orr["bars"], orr["of"],
+            short(start), short(end), _px(orr["high"], p, symbol=res["symbol"]), _px(orr["low"], p, symbol=res["symbol"]), orr["bars"], orr["of"],
             "" if orr["complete"] else ", still forming"))
     label = PHASE_LABEL.get(res["phase"]) or LABEL.get(res["status"], res["status"].upper())
     t = res.get("trigger")
     if t:
         delay_note = ("; data about %d min late" % delay_min) if delay_min > 0 else ""
-        out.append("TRIGGERED %s at %s: the %s bar (bar %d%s) closed above %s %s (%+.2f%%%s)." % (
-            t["time"], _px(t["price"], p), short(datetime.datetime.strptime(t["bar_start"], "%H:%M")),
-            t["bar_index"], delay_note,
-            "the range high" if res["setup"] == "orb" else "the level", _px(res["level"], p), t["pct_over"],
+        is_short = res.get("side") == "sell"
+        dir_w = "below" if is_short else "above"
+        lvl_w = ("the range low" if is_short else "the range high") if res["setup"] == "orb" else "the level"
+        out.append("TRIGGERED %s at %s: the %s bar (bar %d%s) closed %s %s %s (%+.2f%%%s)." % (
+            t["time"], _px(t["price"], p, symbol=res["symbol"]), short(datetime.datetime.strptime(t["bar_start"], "%H:%M")),
+            t["bar_index"], delay_note, dir_w, lvl_w, _px(res["level"], p, symbol=res["symbol"]), t["pct_over"],
             (", %.2fx the range's volume" % t["volume_x"]) if res.get("min_volume_x") and t.get("volume_x") else ""))
         step = INTERVALS[res["interval"]] // 60
         if res.get("minutes_since", 0) > step and res.get("last"):
             out.append("That was %d minutes ago; the last close is %s (%s bar). A late entry is a different "
                        "trade: the price, the stop distance and the odds have moved." % (
-                           res["minutes_since"], _px(res["last"]["close"], p), res["last"]["bar_start"]))
+                           res["minutes_since"], _px(res["last"]["close"], p, symbol=res["symbol"]), res["last"]["bar_start"]))
         if res.get("data_note"):
             out.append(res["data_note"] + ".")
         if res.get("minutes_since", 0) > step:
@@ -672,7 +700,7 @@ def describe(res):
             out.append(res["lag_note"] + ".")
         elif f and res["status"] == "waiting" and res["phase"] in ("open", "forming"):
             out.append("The %s bar is still forming (%s so far, closes %s); it does not count until it closes." % (
-                f["bar_start"].lstrip("0"), _px(f["price"], p), f["closes"]))
+                f["bar_start"].lstrip("0"), _px(f["price"], p, symbol=res["symbol"]), f["closes"]))
         if res["status"] == "expired":
             out.append("No entry on this setup today. Nothing was placed.")
         if res.get("next_open"):
@@ -697,17 +725,17 @@ def bar_line(b, res):
     n_or = orr.get("of") or 0
     if res["setup"] == "orb" and b["slot"] < n_or:
         seen = [x for x in res["_bars"] if x["slot"] <= b["slot"]]
-        note = "range so far %s to %s" % (_px(min(x["l"] for x in seen), p), _px(max(x["h"] for x in seen), p))
+        note = "range so far %s to %s" % (_px(min(x["l"] for x in seen), p, symbol=res["symbol"]), _px(max(x["h"] for x in seen), p, symbol=res["symbol"]))
         if b["slot"] == n_or - 1:
-            note = "opening range set: high %s, low %s" % (_px(orr["high"], p), _px(orr["low"], p))
+            note = "opening range set: high %s, low %s" % (_px(orr["high"], p, symbol=res["symbol"]), _px(orr["low"], p, symbol=res["symbol"]))
     elif t and t["bar_index"] == b["slot"]:
         delay_note = ("; data about %d min late" % delay_min) if delay_min > 0 else ""
         note = "TRIGGERED: closed above %s (%+.2f%%%s). Get in now if you take it: %s, %s" % (
-            _px(lvl, p), t["pct_over"], delay_note, t["time"], _px(t["price"], p))
+            _px(lvl, p, symbol=res["symbol"]), t["pct_over"], delay_note, t["time"], _px(t["price"], p, symbol=res["symbol"]))
     elif lvl is None:
         note = ""
     elif b["c"] > lvl:
-        note = "above %s" % _px(lvl, p)
+        note = "above %s" % _px(lvl, p, symbol=res["symbol"])
         if res["setup"] == "level" or b["slot"] >= n_or:
             avg = orr.get("avg_volume")
             if res.get("min_volume_x") and avg:
@@ -715,8 +743,8 @@ def bar_line(b, res):
             elif b["end"] < datetime.datetime.combine(b["et"].date(), parse_hhmm(res["no_entries_before"], "x", p=p)):
                 note += ", but no entries before %s" % res["no_entries_before"]
     else:
-        note = "%s under %s" % (_px(lvl - b["c"], p), _px(lvl, p))
-    return "%5s bar  closed %s  %s" % (start, _px(b["c"], p), note)
+        note = "%s under %s" % (_px(lvl - b["c"], p, symbol=res["symbol"]), _px(lvl, p, symbol=res["symbol"]))
+    return "%5s bar  closed %s  %s" % (start, _px(b["c"], p, symbol=res["symbol"]), note)
 
 
 # ---------------------------------------------------------------- watch
@@ -861,15 +889,20 @@ def _opts(a, cfg):
     if a.side in ("sell", "short"):
         if not market.allows_short(p, cfg):
             raise EntryError("v2 plans longs only: no short entries. Watch for a buy (--side buy) instead.")
-        raise EntryError("short entries are not implemented yet; watch for a buy (--side buy)")
+        side = "sell"
+    else:
+        side = "buy"
     if a.setup == "orb" and a.level is not None:
         raise EntryError("--level is for --setup level (an orb's level is its range high)")
     if a.min_volume_x is not None and a.min_volume_x <= 0:
         raise EntryError("--min-volume-x must be above 0")
     if a.level is not None and a.level <= 0:
         raise EntryError("--level must be a price above 0")
-    return {"setup": a.setup, "or_minutes": a.or_minutes, "interval": a.interval, "level": a.level,
-            "min_volume_x": a.min_volume_x, "cfg": cfg}
+    opts = {"setup": a.setup, "or_minutes": a.or_minutes, "interval": a.interval, "level": a.level,
+            "min_volume_x": a.min_volume_x, "cfg": cfg, "side": side}
+    if getattr(a, "session", None):
+        opts["session_name"] = a.session
+    return opts
 
 
 def _load(a, sym, now, p=None):
@@ -985,9 +1018,9 @@ def cmd_watchlist(a):
             status = SHORT.get(r["phase"], r["status"]) if r["status"] != "triggered" else "triggered"
             extra = ("  (data about %d min late)" % delay_min) if (t and delay_min > 0) else ""
             print("%-6s  %-9s  %-8s  %-8s  %-9s  %-9s  %s%s" % (
-                s, status[:9], t.get("time") or "-", _px(t["price"], p) if t else "-",
-                _px(r["level"], p) if r.get("level") is not None else "-",
-                _px(last["close"], p) if last else "-",
+                s, status[:9], t.get("time") or "-", _px(t["price"], p, symbol=s) if t else "-",
+                _px(r["level"], p, symbol=s) if r.get("level") is not None else "-",
+                _px(last["close"], p, symbol=s) if last else "-",
                 ("%+.2f%%" % last["vs_level_pct"]) if last.get("vs_level_pct") is not None else "-",
                 extra))
         n = sum(1 for _, r, _ in rows if r and r["status"] == "triggered")
@@ -1006,7 +1039,8 @@ def main(argv=None):
         p.add_argument("--interval", choices=["5m", "1m"], default="5m")
         p.add_argument("--level", type=float, help="the price to close above (--setup level)")
         p.add_argument("--min-volume-x", type=float, help="trigger bar volume vs the range bars' average")
-        p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"], help="v2: buy only")
+        p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"], help="buy/long or sell/short (when market allows)")
+        p.add_argument("--session", choices=["london", "newyork"], help="ORB session open (fx: london or newyork)")
         p.add_argument("--now", help='pretend it is this WIB time, e.g. "2026-11-23 09:35"')
         p.add_argument("--offline", metavar="PATH", help="saved Yahoo chart JSON (.json/.json.gz) or a folder")
         p.add_argument("--config", default="trader/config.json")
